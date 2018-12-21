@@ -1,5 +1,5 @@
 version=4                                   
 opts="mode=git, pgpmode=none, pretty=0.4+git%cd.%h" \             
-https://gitlab.com/astron-idg/idg-lib.git \ 
+https://gitlab.com/astron-idg/idg.git \ 
 HEAD debian uupdate                         
 
