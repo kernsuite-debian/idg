@@ -1,5 +1,13 @@
 #!/usr/bin/make -f
 
-%:
-	dh $@  
 
+%:
+	dh $@  --parallel
+
+override_dh_auto_configure:
+	dh_auto_configure -- \
+		-DBUILD_LIB_CPU=ON \
+		-DBUILD_LIB_CUDA=ON \
+		-DBUILD_LIB_OPENCL=ON \
+		-DBUILD_WITH_PYTHON=ON \
+		-DBUILD_WITH_MKL=OFF

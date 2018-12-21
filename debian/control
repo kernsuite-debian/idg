@@ -2,12 +2,21 @@ Source: idg
 Section: science
 Priority: extra
 Maintainer: KERN packaging <packaging@kernsuite.info>
-Build-Depends: cmake, debhelper (>=9)
+Build-Depends:
+ cmake,
+ debhelper (>=9),
+ libclfft-dev,       
+ dh-python,          
+ python-all,         
+ libfftw3-dev,       
+ nvidia-cuda-toolkit,
+ opencl-clhpp-headers,
+ liblapack-dev,
+ libblas-dev
 Standards-Version: 3.9.8
 Homepage: https://gitlab.com/astron-idg/idg
 
-Package: idg
+Package: libidg
 Architecture: any
-Multi-Arch: foreign
 Depends: ${misc:Depends}, ${shlibs:Depends}
-Description: image domain gridding
+Description: Image Domain Gridding core library
