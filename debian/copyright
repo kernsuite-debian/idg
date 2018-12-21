@@ -1,0 +1,11 @@
+Format: http://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: idg
+Source: https://gitlab.com/astron-idg/idg
+
+Files:     .gitignore
+           .gitlab-ci.yml
+           .gitmodules
+           CMakeLists.txt
+           README.md
+Copyright:  Copyright (C) 2007 Free Software Foundation, Inc. <http://fsf.org/>
+License:   GPL3
