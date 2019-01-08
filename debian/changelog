@@ -3,7 +3,7 @@ idg (0.4+git20190106.4a78e2f-1) bionic; urgency=medium
   [ Gijs Molenaar ]
   * New upstream version 0.4+git20190106.4a78e2f
 
- -- KERN packaging <packaging@kernsuite.info>  Tue, 08 Jan 2019 17:35:46 +0200
+ -- KERN packaging <packaging@kernsuite.info>  Tue, 08 Jan 2019 17:37:07 +0200
 
 idg (0.4+git20181219.e0f1bce-1) bionic; urgency=medium
 
