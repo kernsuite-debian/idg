@@ -44,6 +44,7 @@ endif()
 set_target_properties(
     idg-common PROPERTIES
     PUBLIC_HEADER idg-common.h
+    SOVERSION 0
 )
 
 install(
@@ -78,6 +79,7 @@ target_link_libraries(
 set_target_properties(
     idg-fft PROPERTIES
     PUBLIC_HEADER idg-fft.h
+    SOVERSION 0
 )
 
 install(
@@ -101,7 +103,7 @@ add_library(idg-cpu
 )
 
 
-set(LINK_LIBRARIES idg-common ${CMAKE_DL_LIBS})
+set(LINK_LIBRARIES idg-common ${CMAKE_DL_LIBS} ${FFTW3_LIBRARIES})
 if(BUILD_WITH_MKL)
     set(LINK_LIBRARIES ${LINK_LIBRARIES} ${MKL_LIBRARIES})
 endif()
@@ -111,7 +113,9 @@ target_link_libraries (
 )
 
 set_target_properties(idg-cpu PROPERTIES
-                      PUBLIC_HEADER idg-cpu.h)
+                      PUBLIC_HEADER idg-cpu.h
+                      SOVERSION 0
+  )
 
 install(
   TARGETS idg-cpu
@@ -152,6 +156,7 @@ target_link_libraries (
 set_target_properties(
     idg-cuda PROPERTIES
     PUBLIC_HEADER idg-cuda.h
+    SOVERSION 0
 )
 
 install(
@@ -191,6 +196,7 @@ target_link_libraries (
 set_target_properties (
     idg-hybrid-cuda PROPERTIES
     PUBLIC_HEADER idg-hybrid-cuda.h
+    SOVERSION 0
 )
 
 install(
@@ -231,6 +237,7 @@ target_link_libraries(
 set_target_properties(
     idg-opencl PROPERTIES
     PUBLIC_HEADER idg-opencl.h
+    SOVERSION 0
 )
 
 install(
@@ -271,7 +278,9 @@ target_link_libraries (
 )
 
 set_target_properties(idg PROPERTIES
-                      PUBLIC_HEADER idg.h)
+                      PUBLIC_HEADER idg.h
+                      SOVERSION 0
+                      )
 
 install(
     TARGETS idg
