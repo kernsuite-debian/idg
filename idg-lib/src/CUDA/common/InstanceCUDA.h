@@ -254,6 +254,7 @@ namespace idg {
                     // Misc
                     void free_host_memory();
                     void free_device_memory();
+                    void free_fft_plans();
                     void reset();
                     int get_tile_size_grid() const { return tile_size_grid; };
 
@@ -279,16 +280,14 @@ namespace idg {
                     cu::Stream  *executestream;
                     cu::Stream  *htodstream;
                     cu::Stream  *dtohstream;
-                    cu::Function *function_gridder;
-                    cu::Function *function_degridder;
+                    std::vector<cu::Function *> functions_gridder;
+                    std::vector<cu::Function *> functions_degridder;
                     cu::Function *function_fft;
                     cu::Function *function_adder;
                     cu::Function *function_splitter;
                     cu::Function *function_scaler;
                     cu::Function *function_gridder_post;
                     cu::Function *function_degridder_pre;
-                    cu::Function *function_gridder_1;
-                    cu::Function *function_degridder_1;
 
                     // One instance per device
                     cu::DeviceMemory *d_aterms;
@@ -324,13 +323,9 @@ namespace idg {
                     dim3 block_scaler;
                     dim3 block_gridder_post;
                     dim3 block_degridder_pre;
-                    dim3 block_gridder_1;
-                    dim3 block_degridder_1;
 
                     int batch_gridder;
                     int batch_degridder;
-                    int batch_gridder_1;
-                    int batch_degridder_1;
                     int tile_size_grid;
 
                     // Grid FFT
@@ -338,7 +333,8 @@ namespace idg {
                     cufft::C2C_2D *fft_plan_grid;
 
                     // Subgrid FFT
-                    const unsigned fft_bulk = 1024;
+                    const unsigned fft_bulk_default = 1024;
+                    unsigned fft_bulk  = fft_bulk_default;
                     unsigned fft_batch = 0;
                     unsigned fft_size  = 0;
                     cufft::C2C_2D *fft_plan_bulk;
@@ -384,8 +380,6 @@ namespace idg {
             static const std::string name_scaler    = "kernel_scaler";
             static const std::string name_gridder_post  = "kernel_gridder_post";
             static const std::string name_degridder_pre = "kernel_degridder_pre";
-            static const std::string name_gridder_1     = "kernel_gridder_1";
-            static const std::string name_degridder_1   = "kernel_degridder_1";
 
         } // end namespace cuda
     } // end namespace kernel

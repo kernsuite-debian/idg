@@ -12,7 +12,8 @@ Build-Depends:
  nvidia-cuda-toolkit,
  opencl-clhpp-headers,
  liblapack-dev,
- libblas-dev
+ libblas-dev,
+ libclfft-dev
 Standards-Version: 3.9.8
 Homepage: https://gitlab.com/astron-idg/idg
 
