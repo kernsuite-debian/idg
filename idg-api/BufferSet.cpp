@@ -220,7 +220,17 @@ namespace api {
         m_taper_subgrid.resize(m_subgridsize);
         m_taper_grid.resize(m_padded_size);
 
-        init_optimal_taper_1D(m_subgridsize, m_padded_size, m_size, taper_kernel_size, m_taper_subgrid.data(), m_taper_grid.data());
+        std::string tapertype;
+        if(options.count("taper"))
+          tapertype = options["taper"].as<std::string>();
+        if(tapertype == "blackman-harris")
+        {
+          init_blackman_harris_1D(m_subgridsize, m_taper_subgrid.data());
+          init_blackman_harris_1D(m_padded_size, m_taper_grid.data());
+        }
+        else {
+          init_optimal_taper_1D(m_subgridsize, m_padded_size, m_size, taper_kernel_size, m_taper_subgrid.data(), m_taper_grid.data());
+        }
         // Compute inverse taper
         m_inv_taper.resize(m_size);
         size_t offset = (m_padded_size-m_size)/2;
@@ -230,7 +240,6 @@ namespace api {
             float y = m_taper_grid[i+offset];
             m_inv_taper[i] = 1.0/y;
         }
-
     }
 
 
@@ -316,8 +325,8 @@ namespace api {
         const float lc = l + shift[0];
         const float mc = m + shift[1];
         const float tmp = (lc * lc) + (mc * mc);
-        return tmp > 1.0 ? 1.0 : 1.0 - sqrtf(1.0 - tmp) + shift[2];
-        
+        return tmp > 1.0 ? 1.0 : tmp / (1.0f + sqrtf(1.0f - tmp)) + shift[2];
+
         // evaluate n = 1.0f - sqrt(1.0 - (l * l) - (m * m));
         // accurately for small values of l and m
         //return tmp > 1.0 ? 1.0 : tmp / (1.0f + sqrtf(1.0f - tmp));
@@ -400,11 +409,11 @@ namespace api {
                 for(int x = 0; x < m_size; x++) {
                     // Compute phase
                     const float w_offset = (w+0.5)*m_w_step;
-                    const float l = (y-((int)m_size/2)) * m_cell_size;
-                    const float m = (x-((int)m_size/2)) * m_cell_size;
+                    const float l = (x-((int)m_size/2)) * m_cell_size;
+                    const float m = (y-((int)m_size/2)) * m_cell_size;
                     // evaluate n = 1.0f - sqrt(1.0 - (l * l) - (m * m));
                     // accurately for small values of l and m
-                    const float n = compute_n(l, m, m_shift);
+                    const float n = compute_n(l, -m, m_shift);
                     //const float tmp = (l * l) + (m * m);
                     //const float n = tmp > 1.0 ? 1.0 : tmp / (1.0f + sqrtf(1.0f - tmp));
                     float phase = 2*M_PI*n*w_offset;
@@ -481,9 +490,9 @@ namespace api {
                 for (int x = 0; x < m_size; x++) {
                     // Compute phase
                     const float w_offset = (w+0.5)*m_w_step;
-                    const float l = (y-((int)m_size/2)) * m_cell_size;
-                    const float m = (x-((int)m_size/2)) * m_cell_size;
-                    const float n = compute_n(l, m, m_shift);
+                    const float l = (x-((int)m_size/2)) * m_cell_size;
+                    const float m = (y-((int)m_size/2)) * m_cell_size;
+                    const float n = compute_n(l, -m, m_shift);
                     // evaluate n = 1.0f - sqrt(1.0 - (l * l) - (m * m));
                     // accurately for small values of l and m
                     //const float tmp = (l * l) + (m * m);
