@@ -118,6 +118,7 @@ namespace api {
         typedef unsigned int StationPairs[nr_baselines][2];
         typedef float UVW[nr_baselines][nr_timesteps][3];
         typedef float Weights[nr_baselines][nr_timesteps][nr_channels][nr_correlations];
+        typedef float SumOfWeights[nr_baselines][nr_aterms][nr_correlations];
 
         // Cast class members to multidimensional types used in this method
         ATerms       *aterms        = (ATerms *) m_aterms2.data();
@@ -128,8 +129,8 @@ namespace api {
         Weights      *weights       = (Weights *) m_buffer_weights2.data();
 
         // Initialize sum of weights
-        float sum_of_weights[nr_baselines][nr_aterms][nr_correlations];
-        memset(sum_of_weights, 0, nr_baselines * nr_aterms * nr_correlations * sizeof(float));
+        std::vector<float> sum_of_weights_buffer(nr_baselines*nr_aterms*nr_correlations, 0.0);
+        SumOfWeights &sum_of_weights = *((SumOfWeights *) sum_of_weights_buffer.data());
 
         // Compute sum of weights
         #pragma omp parallel for
@@ -139,8 +140,6 @@ namespace api {
 
             // loop over baselines
             for (int bl = 0; bl < nr_baselines; bl++) {
-                unsigned int antenna1 = (*station_pairs)[bl][0];
-                unsigned int antenna2 = (*station_pairs)[bl][1];
 
                 for (int t = time_start; t < time_end; t++)
                 {
@@ -168,6 +167,11 @@ namespace api {
                 for (int bl = 0; bl < nr_baselines; bl++) {
                     unsigned int antenna1 = (*station_pairs)[bl][0];
                     unsigned int antenna2 = (*station_pairs)[bl][1];
+
+                    // Check whether stationPair is initialized
+                    if (antenna1 > m_nrStations || antenna2 > m_nrStations) {
+                        continue;
+                    }
 
                     std::complex<float> aXX1 = (*aterms)[n][antenna1][0][i][0];
                     std::complex<float> aXY1 = (*aterms)[n][antenna1][0][i][1];
@@ -386,7 +390,7 @@ namespace api {
     {
         BufferImpl::malloc_buffers();
         
-        m_bufferUVW2 = Array2D<UVWCoordinate<float>>(m_nr_baselines, m_bufferTimesteps);
+        m_bufferUVW2 = Array2D<UVW<float>>(m_nr_baselines, m_bufferTimesteps);
         m_bufferVisibilities2.clear();
         for (auto & channel_group : m_channel_groups)
         {

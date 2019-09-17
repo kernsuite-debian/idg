@@ -210,13 +210,13 @@ void run()
     clog << ">>> Initialize data structures" << endl;
     #if USE_DUMMY_VISIBILITIES
     idg::Array3D<idg::Visibility<std::complex<float>>> visibilities_ =
-        idg::get_dummy_visibilities(proxy, nr_baselines, nr_timesteps, nr_channels);
+        idg::get_dummy_visibilities(nr_baselines, nr_timesteps, nr_channels);
     #endif
-    idg::Array2D<idg::UVWCoordinate<float>> uvw_(nr_baselines, nr_timesteps);
+    idg::Array2D<idg::UVW<float>> uvw_(nr_baselines, nr_timesteps);
     idg::Array4D<idg::Matrix2x2<std::complex<float>>> aterms =
-        idg::get_identity_aterms(proxy, nr_timeslots, nr_stations, subgrid_size, subgrid_size);
+        idg::get_identity_aterms(nr_timeslots, nr_stations, subgrid_size, subgrid_size);
     idg::Array1D<unsigned int> aterms_offsets =
-        idg::get_example_aterms_offsets(proxy, nr_timeslots, nr_timesteps);
+        idg::get_example_aterms_offsets(nr_timeslots, nr_timesteps);
     idg::Array2D<float> spheroidal =
         idg::get_example_spheroidal(subgrid_size, subgrid_size);
     idg::Grid grid =
@@ -226,7 +226,7 @@ void run()
     clog << endl;
 
     // Allocate variable data structures
-    idg::Array2D<idg::UVWCoordinate<float>> uvw(nr_baselines, nr_timesteps);
+    idg::Array2D<idg::UVW<float>> uvw(nr_baselines, nr_timesteps);
     #if !USE_DUMMY_VISIBILITIES
     idg::Array3D<idg::Visibility<std::complex<float>>> visibilities_ =
         idg::get_example_visibilities(uvw, frequencies, image_size, grid_size);
@@ -248,7 +248,7 @@ void run()
     bool simulate_spectral_line = getenv("SPECTRAL_LINE");
 
     // Overlap Plan/Data initialization and imaging
-    Queue<idg::Array2D<idg::UVWCoordinate<float>>*> uvws;
+    Queue<idg::Array2D<idg::UVW<float>>*> uvws;
     idg::Plan::Options options;
     options.plan_strict = true;
     options.simulate_spectral_line = simulate_spectral_line;
@@ -281,7 +281,7 @@ void run()
                                                    total_nr_timesteps - time_offset : nr_timesteps;
 
                         // Initialize uvw data
-                        idg::Array2D<idg::UVWCoordinate<float>>* uvw_current = new idg::Array2D<idg::UVWCoordinate<float>>(current_nr_baselines, current_nr_timesteps);
+                        idg::Array2D<idg::UVW<float>>* uvw_current = new idg::Array2D<idg::UVW<float>>(current_nr_baselines, current_nr_timesteps);
                         data.get_uvw(*uvw_current, bl_offset, time_offset, integration_time);
                         uvws.push(uvw_current);
 
@@ -331,10 +331,10 @@ void run()
                     for (unsigned time_offset = 0; time_offset < total_nr_timesteps; time_offset += nr_timesteps) {
 
                         // Load the UVW data for the current set of baselines and timesteps
-                        idg::Array2D<idg::UVWCoordinate<float>>* uvw_current = uvws.pop();
+                        idg::Array2D<idg::UVW<float>>* uvw_current = uvws.pop();
 
                         // Create new Array object using existing pointer with current dimensions
-                        idg::Array2D<idg::UVWCoordinate<float>> uvw(uvw_.data(), current_nr_baselines, nr_timesteps);
+                        idg::Array2D<idg::UVW<float>> uvw(uvw_.data(), current_nr_baselines, nr_timesteps);
 
                         // Copy the uvw data to the new Array object
                         memcpy(uvw.data(), uvw_current->data(), uvw_current->bytes());
@@ -446,18 +446,13 @@ void run()
     runtime_imaging    /= nr_cycles;
 
     // Report runtime
-    idg::auxiliary::report("gridding", runtime_gridding);
-    idg::auxiliary::report("degridding", runtime_degridding);
-    idg::auxiliary::report("fft", runtime_fft);
-    idg::auxiliary::report("imaging", runtime_imaging);
+    idg::report("gridding", runtime_gridding);
+    idg::report("degridding", runtime_degridding);
+    idg::report("fft", runtime_fft);
+    idg::report("imaging", runtime_imaging);
 
     // Report throughput
-    idg::auxiliary::report_visibilities("gridding", runtime_gridding, nr_visibilities);
-    idg::auxiliary::report_visibilities("degridding", runtime_degridding, nr_visibilities);
-    idg::auxiliary::report_visibilities("imaging", runtime_imaging, nr_visibilities);
-
-    // Cleanup
-    delete aterms.data();
-    delete visibilities_.data();
-    delete aterms_offsets.data();
+    idg::report_visibilities("gridding", runtime_gridding, nr_visibilities);
+    idg::report_visibilities("degridding", runtime_degridding, nr_visibilities);
+    idg::report_visibilities("imaging", runtime_imaging, nr_visibilities);
 }

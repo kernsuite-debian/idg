@@ -46,7 +46,7 @@ namespace idg {
         unsigned int nr_stations,
         unsigned int nr_baselines);
 
-    Array2D<UVWCoordinate<float>> get_example_uvw(
+    Array2D<UVW<float>> get_example_uvw(
         proxy::Proxy& proxy,
         unsigned int nr_stations,
         unsigned int nr_baselines,
@@ -60,6 +60,13 @@ namespace idg {
         unsigned int width);
 
     Array4D<Matrix2x2<std::complex<float>>> get_identity_aterms(
+        proxy::Proxy& proxy,
+        unsigned int nr_timeslots,
+        unsigned int nr_stations,
+        unsigned int height,
+        unsigned int width);
+
+    Array4D<Matrix2x2<std::complex<float>>> get_example_aterms(
         proxy::Proxy& proxy,
         unsigned int nr_timeslots,
         unsigned int nr_stations,
@@ -92,7 +99,7 @@ namespace idg {
         unsigned int nr_channels);
 
     Array3D<Visibility<std::complex<float>>> get_example_visibilities(
-        Array2D<UVWCoordinate<float>> &uvw,
+        Array2D<UVW<float>> &uvw,
         Array1D<float> &frequencies,
         float        image_size,
         unsigned int grid_size,
@@ -105,7 +112,7 @@ namespace idg {
         unsigned int nr_stations,
         unsigned int nr_baselines);
 
-    Array2D<UVWCoordinate<float>> get_example_uvw(
+    Array2D<UVW<float>> get_example_uvw(
         unsigned int nr_stations,
         unsigned int nr_baselines,
         unsigned int nr_timesteps,
@@ -117,6 +124,12 @@ namespace idg {
         unsigned int width);
 
     Array4D<Matrix2x2<std::complex<float>>> get_identity_aterms(
+        unsigned int nr_timeslots,
+        unsigned int nr_stations,
+        unsigned int height,
+        unsigned int width);
+
+    Array4D<Matrix2x2<std::complex<float>>> get_example_aterms(
         unsigned int nr_timeslots,
         unsigned int nr_stations,
         unsigned int height,
@@ -138,7 +151,7 @@ namespace idg {
 
     void add_pt_src(
         Array3D<Visibility<std::complex<float>>> &visibilities,
-        Array2D<UVWCoordinate<float>> &uvw,
+        Array2D<UVW<float>> &uvw,
         Array1D<float> &frequencies,
         float          image_size,
         unsigned int   grid_size,
@@ -188,7 +201,7 @@ namespace idg {
                 float image_size,
                 unsigned int channel_offset = 0) const;
 
-            Array2D<UVWCoordinate<float>> get_uvw(
+            Array2D<UVW<float>> get_uvw(
                 unsigned int nr_baselines,
                 unsigned int nr_timesteps,
                 unsigned int baseline_offset = 0,
@@ -196,7 +209,7 @@ namespace idg {
                 float integration_time = INTEGRATION_TIME) const;
 
             void get_uvw(
-                Array2D<UVWCoordinate<float>>& uvw,
+                Array2D<UVW<float>>& uvw,
                 unsigned int baseline_offset = 0,
                 unsigned int time_offset = 0,
                 float integration_time = INTEGRATION_TIME) const;

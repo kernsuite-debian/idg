@@ -1,5 +1,7 @@
 #include "KernelsInstance.h"
 
+#include "Index.h"
+
 namespace idg {
     namespace kernel {
 
@@ -87,8 +89,8 @@ namespace idg {
                 int y = pixel / grid_size;
                 int x = pixel % grid_size;
                 for (int pol = 0; pol < nr_correlations; pol++) {
-                    long src_idx = index_grid_tiling(tile_size, nr_correlations, grid_size, pol, y, x);
-                    long dst_idx = index_grid(nr_correlations, grid_size, 0, pol, y, x);
+                    long src_idx = index_grid_tiling(tile_size, grid_size, pol, y, x);
+                    long dst_idx = index_grid(grid_size, 0, pol, y, x);
 
                     dst_ptr[dst_idx] = src_ptr[src_idx];
                 }
@@ -115,11 +117,50 @@ namespace idg {
                 int y = pixel / grid_size;
                 int x = pixel % grid_size;
                 for (int pol = 0; pol < nr_correlations; pol++) {
-                    long src_idx = index_grid(nr_correlations, grid_size, 0, pol, y, x);
-                    long dst_idx = index_grid_tiling(tile_size, nr_correlations, grid_size, pol, y, x);
+                    long src_idx = index_grid(grid_size, 0, pol, y, x);
+                    long dst_idx = index_grid_tiling(tile_size, grid_size, pol, y, x);
                     dst_ptr[dst_idx] = src_ptr[src_idx];
                 }
             }
+        }
+
+        void KernelsInstance::transpose_aterm(
+            const Array4D<Matrix2x2<std::complex<float>>>& aterms_src,
+                  Array4D<std::complex<float>>& aterms_dst) const
+        {
+            ASSERT(aterms_src.bytes() == aterms_dst.bytes());
+            ASSERT(aterms_src.get_y_dim() == aterms_src.get_x_dim());
+            ASSERT(aterms_dst.get_z_dim() == NR_CORRELATIONS);
+            const unsigned int nr_stations  = aterms_src.get_w_dim();
+            const unsigned int nr_timeslots = aterms_src.get_z_dim();
+            const unsigned int subgrid_size = aterms_src.get_y_dim();
+
+            #pragma omp parallel for
+            for (unsigned int pixel = 0; pixel < subgrid_size*subgrid_size; pixel++) {
+                for (unsigned int station = 0; station < nr_stations; station++) {
+                    for (unsigned int timeslot = 0; timeslot < nr_timeslots; timeslot++) {
+                        unsigned int y = pixel / subgrid_size;
+                        unsigned int x = pixel % subgrid_size;
+                        unsigned int term_nr = station * nr_timeslots + timeslot;
+
+                        Matrix2x2<std::complex<float>> term = aterms_src(station, timeslot, y, x);
+                        aterms_dst(term_nr, 0, y, x) = term.xx;
+                        aterms_dst(term_nr, 1, y, x) = term.xy;
+                        aterms_dst(term_nr, 2, y, x) = term.yx;
+                        aterms_dst(term_nr, 3, y, x) = term.yy;
+                    }
+                }
+            }
+        }
+
+        void KernelsInstance::print_memory_info() {
+            auto memory_total = auxiliary::get_total_memory() / (float) 1024; // GBytes
+            auto memory_used  = auxiliary::get_used_memory() / (float) 1024; // GBytes
+            auto memory_free  = memory_total - memory_used;
+            std::clog << "Host memory -> " << std::fixed << std::setprecision(1);
+            std::clog << "total: " << memory_total << " Gb, ";
+            std::clog << "used: "  << memory_used  << " Gb, ";
+            std::clog << "free: "  << memory_free  << " Gb" << std::endl;
         }
 
     } // namespace kernel

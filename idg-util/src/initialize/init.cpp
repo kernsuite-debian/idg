@@ -90,188 +90,29 @@ namespace idg {
     }
 
 
-    /*
-     * Memory-allocation is handled by Proxy
-     */
-    Array1D<float> get_example_frequencies(
-        proxy::Proxy& proxy,
-        unsigned int nr_channels,
-        float start_frequency,
-        float frequency_increment)
+    void init_example_aterms(
+        Array4D<Matrix2x2<std::complex<float>>> &aterms)
     {
-        auto bytes = auxiliary::sizeof_wavenumbers(nr_channels);
-        float* ptr = (float *) proxy.allocate_memory(bytes);
-
-        Array1D<float> frequencies(ptr, nr_channels);
-
-        for (unsigned chan = 0; chan < nr_channels; chan++) {
-            frequencies(chan) = start_frequency + frequency_increment * chan;
-        }
-
-        return frequencies;
-    }
-
-    Array3D<Visibility<std::complex<float>>> get_dummy_visibilities(
-        proxy::Proxy& proxy,
-        unsigned int nr_baselines,
-        unsigned int nr_timesteps,
-        unsigned int nr_channels)
-    {
-        auto bytes = auxiliary::sizeof_visibilities(nr_baselines, nr_timesteps, nr_channels);
-        Visibility<std::complex<float>>* ptr = (Visibility<std::complex<float>>*) proxy.allocate_memory(bytes);
-
-        Array3D<Visibility<std::complex<float>>> visibilities(ptr, nr_baselines, nr_timesteps, nr_channels);
-        const Visibility<std::complex<float>> visibility = {1.0f, 0.0f, 0.0f, 1.0f};
-
-        // Set all visibilities
-        #pragma omp parallel for
-        for (unsigned bl = 0; bl < nr_baselines; bl++) {
-            for (unsigned time = 0; time < nr_timesteps; time++) {
-                for (unsigned chan = 0; chan < nr_channels; chan++) {
-                    visibilities(bl, time, chan) = visibility;
-                }
-            }
-        }
-
-        return visibilities;
-    }
-
-    Array1D<std::pair<unsigned int,unsigned int>> get_example_baselines(
-        proxy::Proxy& proxy,
-        unsigned int nr_stations,
-        unsigned int nr_baselines)
-    {
-        auto bytes = auxiliary::sizeof_baselines(nr_baselines);
-        std::pair<unsigned int, unsigned int>* ptr = (std::pair<unsigned int, unsigned int>*) proxy.allocate_memory(bytes);
-        Array1D<std::pair<unsigned int,unsigned int>> baselines(ptr, nr_baselines);
-
-        unsigned bl = 0;
-
-        for (unsigned station1 = 0 ; station1 < nr_stations; station1++) {
-            for (unsigned station2 = station1 + 1; station2 < nr_stations; station2++) {
-                if (bl >= nr_baselines) {
-                    break;
-                }
-                baselines(bl) = std::pair<unsigned int,unsigned int>(station1, station2);
-                bl++;
-            }
-        }
-
-        return baselines;
-    }
-
-    Array2D<UVWCoordinate<float>> get_example_uvw(
-        proxy::Proxy& proxy,
-        unsigned int nr_stations,
-        unsigned int nr_baselines,
-        unsigned int nr_timesteps,
-        float integration_time)
-    {
-        auto bytes = auxiliary::sizeof_uvw(nr_baselines, nr_timesteps);
-        UVWCoordinate<float>* ptr = (UVWCoordinate<float>*) proxy.allocate_memory(bytes);
-
-        Array2D<UVWCoordinate<float>> uvw(ptr, nr_baselines, nr_timesteps);
-
-        Data data;
-        data.get_uvw(uvw);
-
-        return uvw;
-    }
-
-    Array3D<std::complex<float>> get_zero_grid(
-        proxy::Proxy& proxy,
-        unsigned int nr_correlations,
-        unsigned int height,
-        unsigned int width)
-    {
-        assert(height == width);
-        auto bytes = auxiliary::sizeof_grid(height);
-        std::complex<float>* ptr = (std::complex<float>*) proxy.allocate_memory(bytes);
-
-        Array3D<std::complex<float>> grid(ptr, nr_correlations, height, width);
-				std::fill_n(grid.data(), grid.size(), 0.0);
-        return grid;
-    }
-
-    Array4D<Matrix2x2<std::complex<float>>> get_identity_aterms(
-        proxy::Proxy& proxy,
-        unsigned int nr_timeslots,
-        unsigned int nr_stations,
-        unsigned int height,
-        unsigned int width)
-    {
-        assert(height == width);
-        auto bytes = auxiliary::sizeof_aterms(nr_stations, nr_timeslots, height);
-        Matrix2x2<std::complex<float>>* ptr = (Matrix2x2<std::complex<float>>*) proxy.allocate_memory(bytes);
-
-        Array4D<Matrix2x2<std::complex<float>>> aterms(ptr, nr_timeslots, nr_stations, height, width);
-        const Matrix2x2<std::complex<float>> aterm = {1.0f, 0.0f, 0.0f, 1.0f};
+        unsigned int nr_timeslots = aterms.get_w_dim();
+        unsigned int nr_stations  = aterms.get_z_dim();
+        unsigned int height       = aterms.get_y_dim();
+        unsigned int width        = aterms.get_x_dim();
 
         for (unsigned t = 0; t < nr_timeslots; t++) {
             for (unsigned ant = 0; ant < nr_stations; ant++) {
                 for (unsigned y = 0; y < height; y++) {
                     for (unsigned x = 0; x < width; x++) {
+                        float scale = ((float) (t+1) / nr_timeslots);
+                        std::complex<float> valueXX = std::complex<float>(scale * 1.0, 1.1);
+                        std::complex<float> valueXY = std::complex<float>(scale * 0.8, 0.9);
+                        std::complex<float> valueYX = std::complex<float>(scale * 0.6, 1.7);
+                        std::complex<float> valueYY = std::complex<float>(scale * 0.4, 0.5);
+                        const Matrix2x2<std::complex<float>> aterm = {valueXX, valueXY, valueYX, valueYY};
                         aterms(t, ant, y, x) = aterm;
                     }
                 }
             }
         }
-
-        return aterms;
-    }
-
-    Array1D<unsigned int> get_example_aterms_offsets(
-        proxy::Proxy& proxy,
-        unsigned int nr_timeslots,
-        unsigned int nr_timesteps)
-    {
-        auto bytes = auxiliary::sizeof_aterms_offsets(nr_timeslots);
-        unsigned int* ptr = (unsigned int*) proxy.allocate_memory(bytes);
-
-        Array1D<unsigned int> aterms_offsets(ptr, nr_timeslots + 1);
-
-        for (unsigned time = 0; time < nr_timeslots; time++) {
-             aterms_offsets(time) = time * (nr_timesteps / nr_timeslots);
-        }
-
-        aterms_offsets(nr_timeslots) = nr_timesteps;
-
-        return aterms_offsets;
-    }
-
-    Array2D<float> get_example_spheroidal(
-        proxy::Proxy& proxy,
-        unsigned int height,
-        unsigned int width)
-    {
-        assert(height == width);
-        auto bytes = auxiliary::sizeof_spheroidal(height);
-        float* ptr = (float*) proxy.allocate_memory(bytes);
-
-        Array2D<float> spheroidal(ptr, height, width);
-
-        // Evaluate rows
-        float y[height];
-        for (unsigned i = 0; i < height; i++) {
-            float tmp = fabs(-1 + i*2.0f/float(height));
-            y[i] = evaluate_spheroidal(tmp);
-        }
-
-        // Evaluate columns
-        float x[width];
-        for (unsigned i = 0; i < width; i++) {
-            float tmp = fabs(-1 + i*2.0f/float(width));
-            x[i] = evaluate_spheroidal(tmp);
-        }
-
-        // Set values
-        for (unsigned i = 0; i < height; i++) {
-            for (unsigned j = 0; j < width; j++) {
-                 spheroidal(i, j) = y[i]*x[j];
-            }
-        }
-
-        return spheroidal;
     }
 
 
@@ -314,7 +155,7 @@ namespace idg {
     }
 
     Array3D<Visibility<std::complex<float>>> get_example_visibilities(
-        Array2D<UVWCoordinate<float>> &uvw,
+        Array2D<UVW<float>> &uvw,
         Array1D<float> &frequencies,
         float        image_size,
         unsigned int grid_size,
@@ -364,13 +205,13 @@ namespace idg {
     }
 
 
-    Array2D<UVWCoordinate<float>> get_example_uvw(
+    Array2D<UVW<float>> get_example_uvw(
         unsigned int nr_stations,
         unsigned int nr_baselines,
         unsigned int nr_timesteps,
         float integration_time)
     {
-        Array2D<UVWCoordinate<float>> uvw(nr_baselines, nr_timesteps);
+        Array2D<UVW<float>> uvw(nr_baselines, nr_timesteps);
 
         Data data;
         data.get_uvw(uvw);
@@ -409,6 +250,19 @@ namespace idg {
             }
         }
 
+        return aterms;
+    }
+
+
+    Array4D<Matrix2x2<std::complex<float>>> get_example_aterms(
+        unsigned int nr_timeslots,
+        unsigned int nr_stations,
+        unsigned int height,
+        unsigned int width)
+    {
+        assert(height == width);
+        Array4D<Matrix2x2<std::complex<float>>> aterms(nr_timeslots, nr_stations, height, width);
+        init_example_aterms(aterms);
         return aterms;
     }
 
@@ -486,7 +340,7 @@ namespace idg {
 
     void add_pt_src(
         Array3D<Visibility<std::complex<float>>> &visibilities,
-        Array2D<UVWCoordinate<float>> &uvw,
+        Array2D<UVW<float>> &uvw,
         Array1D<float> &frequencies,
         float          image_size,
         unsigned int   grid_size,
@@ -710,20 +564,20 @@ namespace idg {
         }
     }
 
-    Array2D<UVWCoordinate<float>> Data::get_uvw(
+    Array2D<UVW<float>> Data::get_uvw(
         unsigned int nr_baselines,
         unsigned int nr_timesteps,
         unsigned int baseline_offset,
         unsigned int time_offset,
         float integration_time) const
     {
-        Array2D<UVWCoordinate<float>> uvw(nr_baselines, nr_timesteps);
+        Array2D<UVW<float>> uvw(nr_baselines, nr_timesteps);
         get_uvw(uvw, baseline_offset, time_offset, integration_time);
         return uvw;
     }
 
     void Data::get_uvw(
-        Array2D<UVWCoordinate<float>>& uvw,
+        Array2D<UVW<float>>& uvw,
         unsigned int baseline_offset,
         unsigned int time_offset,
         float integration_time) const

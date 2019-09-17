@@ -48,7 +48,7 @@ namespace idg {
                     const unsigned int subgrid_size,
                     const Array1D<float>& frequencies,
                     const Array3D<Visibility<std::complex<float>>>& visibilities,
-                    const Array2D<UVWCoordinate<float>>& uvw,
+                    const Array2D<UVW<float>>& uvw,
                     const Array1D<std::pair<unsigned int,unsigned int>>& baselines,
                     Grid& grid,
                     const Array4D<Matrix2x2<std::complex<float>>>& aterms,
@@ -63,7 +63,7 @@ namespace idg {
                     const unsigned int subgrid_size,
                     const Array1D<float>& frequencies,
                     const Array3D<Visibility<std::complex<float>>>& visibilities,
-                    const Array2D<UVWCoordinate<float>>& uvw,
+                    const Array2D<UVW<float>>& uvw,
                     const Array1D<std::pair<unsigned int,unsigned int>>& baselines,
                     Grid& grid,
                     const Array4D<Matrix2x2<std::complex<float>>>& aterms,
@@ -115,7 +115,7 @@ namespace idg {
                     const unsigned int subgrid_size,
                     const Array1D<float>& frequencies,
                     Array3D<Visibility<std::complex<float>>>& visibilities,
-                    const Array2D<UVWCoordinate<float>>& uvw,
+                    const Array2D<UVW<float>>& uvw,
                     const Array1D<std::pair<unsigned int,unsigned int>>& baselines,
                     const Grid& grid,
                     const Array4D<Matrix2x2<std::complex<float>>>& aterms,
@@ -130,7 +130,7 @@ namespace idg {
                     const unsigned int subgrid_size,
                     const Array1D<float>& frequencies,
                     Array3D<Visibility<std::complex<float>>>& visibilities,
-                    const Array2D<UVWCoordinate<float>>& uvw,
+                    const Array2D<UVW<float>>& uvw,
                     const Array1D<std::pair<unsigned int,unsigned int>>& baselines,
                     const Grid& grid,
                     const Array4D<Matrix2x2<std::complex<float>>>& aterms,
@@ -173,6 +173,48 @@ namespace idg {
                     unsigned int spheroidal_height,
                     unsigned int spheroidal_width);
 
+                void calibrate_init(
+                    const float w_step,
+                    const Array1D<float>& shift,
+                    const float cell_size,
+                    const unsigned int kernel_size,
+                    const unsigned int subgrid_size,
+                    const Array1D<float>& frequencies,
+                    Array3D<Visibility<std::complex<float>>>& visibilities,
+                    Array3D<Visibility<float>>& weights,
+                    const Array2D<UVW<float>>& uvw,
+                    const Array1D<std::pair<unsigned int,unsigned int>>& baselines,
+                    const Grid& grid,
+                    const Array1D<unsigned int>& aterms_offsets,
+                    const Array2D<float>& spheroidal);
+
+                void calibrate_update(
+                    const int station_nr,
+                    const Array4D<Matrix2x2<std::complex<float>>>& aterms,
+                    const Array4D<Matrix2x2<std::complex<float>>>& derivative_aterms,
+                    Array3D<double>& hessian,
+                    Array2D<double>& gradient,
+                    double &residual);
+
+                void calibrate_init_hessian_vector_product();
+
+                void calibrate_update_hessian_vector_product1(
+                    const int station_nr,
+                    const Array4D<Matrix2x2<std::complex<float>>>& aterms,
+                    const Array4D<Matrix2x2<std::complex<float>>>& derivative_aterms,
+                    const Array2D<float>& parameter_vector);
+
+                void calibrate_update_hessian_vector_product2(
+                    const int station_nr,
+                    const Array4D<Matrix2x2<std::complex<float>>>& aterms,
+                    const Array4D<Matrix2x2<std::complex<float>>>& derivative_aterms,
+                    Array2D<float>& parameter_vector);
+
+
+                void calibrate_finish();
+
+                virtual void init_wtiles(int subgrid_size) {}
+
                 //! Applyies (inverse) Fourier transform to grid
                 void transform(
                     DomainAtoDomainB direction,
@@ -190,6 +232,7 @@ namespace idg {
                 virtual bool supports_wstack_gridding() {return false;}
                 virtual bool supports_wstack_degridding() {return false;}
                 virtual bool supports_avg_aterm_correction() {return false;}
+                virtual bool supports_wtiles() {return false;}
 
                 void set_avg_aterm_correction(const Array4D<std::complex<float>>& avg_aterm_correction);
                 void unset_avg_aterm_correction();
@@ -217,7 +260,7 @@ namespace idg {
                     const unsigned int subgrid_size,
                     const Array1D<float>& frequencies,
                     const Array3D<Visibility<std::complex<float>>>& visibilities,
-                    const Array2D<UVWCoordinate<float>>& uvw,
+                    const Array2D<UVW<float>>& uvw,
                     const Array1D<std::pair<unsigned int,unsigned int>>& baselines,
                     const Grid& grid,
                     const Array4D<Matrix2x2<std::complex<float>>>& aterms,
@@ -234,7 +277,7 @@ namespace idg {
                     const unsigned int subgrid_size,
                     const Array1D<float>& frequencies,
                     const Array3D<Visibility<std::complex<float>>>& visibilities,
-                    const Array2D<UVWCoordinate<float>>& uvw,
+                    const Array2D<UVW<float>>& uvw,
                     const Array1D<std::pair<unsigned int,unsigned int>>& baselines,
                     Grid& grid,
                     const Array4D<Matrix2x2<std::complex<float>>>& aterms,
@@ -251,23 +294,42 @@ namespace idg {
                     const unsigned int subgrid_size,
                     const Array1D<float>& frequencies,
                     Array3D<Visibility<std::complex<float>>>& visibilities,
-                    const Array2D<UVWCoordinate<float>>& uvw,
+                    const Array2D<UVW<float>>& uvw,
                     const Array1D<std::pair<unsigned int,unsigned int>>& baselines,
                     const Grid& grid,
                     const Array4D<Matrix2x2<std::complex<float>>>& aterms,
                     const Array1D<unsigned int>& aterms_offsets,
                     const Array2D<float>& spheroidal);
 
+                virtual Plan* make_plan(
+                    const int kernel_size,
+                    const int subgrid_size,
+                    const int grid_size,
+                    const float cell_size,
+                    const Array1D<float>& frequencies,
+                    const Array2D<UVW<float>>& uvw,
+                    const Array1D<std::pair<unsigned int,unsigned int>>& baselines,
+                    const Array1D<unsigned int>& aterms_offsets,
+                    Plan::Options options = Plan::Options())
+                {
+                    return new Plan(
+                        kernel_size,
+                        subgrid_size,
+                        grid_size,
+                        cell_size,
+                        frequencies,
+                        uvw,
+                        baselines,
+                        aterms_offsets,
+                        options
+                    );
+                }
+
                 //! Dummy method
                 virtual void finish_gridding() {};
 
                 //! Dummy method
                 virtual void finish_degridding() {};
-
-                /*
-                 * Misc
-                 */
-                inline void* allocate_memory(size_t size) { return malloc(size); }
 
             private:
                 //! Degrid the visibilities from a uniform grid
@@ -280,7 +342,7 @@ namespace idg {
                     const unsigned int subgrid_size,
                     const Array1D<float>& frequencies,
                     const Array3D<Visibility<std::complex<float>>>& visibilities,
-                    const Array2D<UVWCoordinate<float>>& uvw,
+                    const Array2D<UVW<float>>& uvw,
                     const Array1D<std::pair<unsigned int,unsigned int>>& baselines,
                     Grid& grid,
                     const Array4D<Matrix2x2<std::complex<float>>>& aterms,
@@ -296,12 +358,54 @@ namespace idg {
                     const unsigned int subgrid_size,
                     const Array1D<float>& frequencies,
                     Array3D<Visibility<std::complex<float>>>& visibilities,
-                    const Array2D<UVWCoordinate<float>>& uvw,
+                    const Array2D<UVW<float>>& uvw,
                     const Array1D<std::pair<unsigned int,unsigned int>>& baselines,
                     const Grid& grid,
                     const Array4D<Matrix2x2<std::complex<float>>>& aterms,
                     const Array1D<unsigned int>& aterms_offsets,
                     const Array2D<float>& spheroidal) = 0;
+
+                // Uses rvalue references (&&) for all containers do_calibrate_init will take ownership of.
+                // Call with std::move(...)
+                virtual void do_calibrate_init(
+                    std::vector<std::unique_ptr<Plan>> &&plans,
+                    float w_step, // in lambda
+                    Array1D<float> &&shift,
+                    float cell_size, // TODO: unit?
+                    unsigned int kernel_size, // full width in pixels
+                    unsigned int subgrid_size,
+                    const Array1D<float> &frequencies,
+                    Array4D<Visibility<std::complex<float>>> &&visibilities,
+                    Array4D<Visibility<float>> &&weights,
+                    Array3D<UVW<float>> &&uvw,
+                    Array2D<std::pair<unsigned int,unsigned int>> &&baselines,
+                    const Grid& grid,
+                    const Array2D<float>& spheroidal) {}
+
+                virtual void do_calibrate_update(
+                    const int station_nr,
+                    const Array4D<Matrix2x2<std::complex<float>>>& aterms,
+                    const Array4D<Matrix2x2<std::complex<float>>>& derivative_aterms,
+                    Array3D<double>& hessian,
+                    Array2D<double>& gradient,
+                    double &residual
+                ) {}
+
+                virtual void do_calibrate_finish() {}
+
+                virtual void do_calibrate_init_hessian_vector_product() {}
+
+                virtual void do_calibrate_update_hessian_vector_product1(
+                    const int station_nr,
+                    const Array4D<Matrix2x2<std::complex<float>>>& aterms,
+                    const Array4D<Matrix2x2<std::complex<float>>>& derivative_aterms,
+                    const Array2D<float>& parameter_vector) {}
+
+                virtual void do_calibrate_update_hessian_vector_product2(
+                    const int station_nr,
+                    const Array4D<Matrix2x2<std::complex<float>>>& aterms,
+                    const Array4D<Matrix2x2<std::complex<float>>>& derivative_aterms,
+                    Array2D<float>& parameter_vector) {}
 
                 //! Applyies (inverse) Fourier transform to grid
                 virtual void do_transform(
@@ -337,7 +441,7 @@ namespace idg {
                     unsigned int subgrid_size,
                     const Array1D<float>& frequencies,
                     const Array3D<Visibility<std::complex<float>>>& visibilities,
-                    const Array2D<UVWCoordinate<float>>& uvw,
+                    const Array2D<UVW<float>>& uvw,
                     const Array1D<std::pair<unsigned int,unsigned int>>& baselines,
                     const Grid& grid,
                     const Array4D<Matrix2x2<std::complex<float>>>& aterms,

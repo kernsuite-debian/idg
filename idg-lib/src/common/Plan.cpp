@@ -15,18 +15,43 @@ namespace idg {
         const int grid_size,
         const float cell_size,
         const Array1D<float>& frequencies,
-        const Array2D<UVWCoordinate<float>>& uvw,
+        const Array2D<UVW<float>>& uvw,
         const Array1D<std::pair<unsigned int,unsigned int>>& baselines,
         const Array1D<unsigned int>& aterms_offsets,
-        Options options)
+        Options options) :
+        use_wtiles(false)
     {
         #if defined(DEBUG)
-        cout << __func__ << endl;
+        cout << "Plan::" << __func__ << endl;
+        #endif
+
+        WTiles dummy_wtiles(0);
+
+        initialize(
+            kernel_size, subgrid_size, grid_size, cell_size,
+            frequencies, uvw, baselines, aterms_offsets, dummy_wtiles, options);
+    }
+
+    Plan::Plan(
+        const int kernel_size,
+        const int subgrid_size,
+        const int grid_size,
+        const float cell_size,
+        const Array1D<float>& frequencies,
+        const Array2D<UVW<float>>& uvw,
+        const Array1D<std::pair<unsigned int,unsigned int>>& baselines,
+        const Array1D<unsigned int>& aterms_offsets,
+        WTiles &wtiles,
+        Options options) :
+        use_wtiles(true)
+    {
+        #if defined(DEBUG)
+        cout << "Plan::" << __func__ << " (with WTiles)" << endl;
         #endif
 
         initialize(
             kernel_size, subgrid_size, grid_size, cell_size,
-            frequencies, uvw, baselines, aterms_offsets, options);
+            frequencies, uvw, baselines, aterms_offsets, wtiles, options);
     }
 
     class Subgrid {
@@ -118,10 +143,14 @@ namespace idg {
                         w_index       <   ((int) nr_w_layers);
             }
 
-            void compute_coordinate() {
+            void compute_coordinate()
+            {
                 // Compute middle point in pixels
                 int u_pixels = roundf((u_max + u_min) / 2);
                 int v_pixels = roundf((v_max + v_min) / 2);
+
+                int wtile_x = floor(double(u_pixels) / WTILE_SIZE);
+                int wtile_y = floor(double(v_pixels) / WTILE_SIZE);
 
                 // Shift center from middle of grid to top left
                 u_pixels += (grid_size/2);
@@ -132,6 +161,7 @@ namespace idg {
                 v_pixels -= (subgrid_size/2);
 
                 coordinate = {u_pixels, v_pixels, w_index};
+                wtile_coordinate = {wtile_x, wtile_y, w_index};
             }
 
             void finish() {
@@ -144,6 +174,13 @@ namespace idg {
                     throw std::runtime_error("finish the subgrid before retrieving its coordinate");
                 }
                 return coordinate;
+            }
+
+            Coordinate get_wtile_coordinate() {
+                if (!finished) {
+                    throw std::runtime_error("finish the subgrid before retrieving its coordinate");
+                }
+                return wtile_coordinate;
             }
 
             const int kernel_size;
@@ -159,6 +196,7 @@ namespace idg {
             int nr_w_layers;
             bool finished;
             Coordinate coordinate;
+            Coordinate wtile_coordinate;
     }; // end class Subgrid
 
 
@@ -172,15 +210,42 @@ namespace idg {
         return meters * (frequency / speed_of_light);
     }
 
+    std::vector<std::pair<int,int>> make_channel_groups(float baseline_length, float uv_span_frequency, float image_size, const Array1D<float>& frequencies) {
+        std::vector<std::pair<int,int>> result;
+
+        unsigned int nr_channels = frequencies.get_x_dim();
+
+        // There will be at most as many channel_groups as channels
+        result.reserve(nr_channels);
+
+        float begin_pos = meters_to_pixels(baseline_length, image_size, frequencies(0));
+
+        for (unsigned int begin_channel = 0; begin_channel < nr_channels;)
+        {
+            float end_pos;
+            unsigned int end_channel;
+            for (end_channel = begin_channel+1; end_channel < nr_channels; end_channel++)
+            {
+                end_pos = meters_to_pixels(baseline_length, image_size, frequencies(end_channel));
+                if (std::abs(begin_pos - end_pos) > uv_span_frequency) break;
+            }
+            result.push_back({begin_channel, end_channel});
+            begin_channel = end_channel;
+            begin_pos = end_pos;
+        }
+        return result;
+    }
+
     void Plan::initialize(
         const int kernel_size,
         const int subgrid_size,
         const int grid_size,
         const float cell_size,
         const Array1D<float>& frequencies,
-        const Array2D<UVWCoordinate<float>>& uvw,
+        const Array2D<UVW<float>>& uvw,
         const Array1D<std::pair<unsigned int,unsigned int>>& baselines,
         const Array1D<unsigned int>& aterms_offsets,
+        WTiles &wtiles,
         const Options& options)
     {
         #if defined(DEBUG)
@@ -214,13 +279,10 @@ namespace idg {
         }
 
         // Allocate metadata
-        metadata.reserve(nr_baselines * nr_timesteps / nr_timeslots);
+        metadata.reserve(nr_baselines);
 
         // Temporary metadata vector for individual baselines
         std::vector<Metadata> metadata_[nr_baselines];
-        for (unsigned bl = 0; bl < nr_baselines; bl++) {
-            metadata_[bl].reserve(nr_timesteps / nr_timeslots);
-        }
 
         // Iterate all baselines
         #pragma omp parallel for
@@ -228,17 +290,41 @@ namespace idg {
             // Get baseline
             Baseline baseline = (Baseline) {baselines(bl).first, baselines(bl).second};
 
-            // Iterate all time slots
-            for (unsigned timeslot = 0; timeslot < nr_timeslots; timeslot++) {
-                // Get aterm offset
-                const unsigned current_aterms_offset = aterms_offsets(timeslot);
-                const unsigned next_aterms_offset    = aterms_offsets(timeslot+1);
+            // Increment time_offset0 until a valid value is found
+            unsigned int time_offset0 = 0;
+            for (; time_offset0 < nr_timesteps; time_offset0++) {
+                if (std::isfinite(uvw(bl, time_offset0).u)) break;
+            }
+            // If no valid value is found continue with next baseline
+            if (time_offset0 == nr_timesteps) continue;
 
-                // The aterm index is equal to the timeslot
-                const unsigned aterm_index = timeslot;
+            // Reserved space for coverage in frequency from the subgrid pixel budget
+            // The available pixels (subgrid_size - kernel_size) are diveded over coverage
+            // in time and in frequency.
+            // The number of channels in a channel_group is fixed below
+            // The remaining space is dynamically filled by adding samples over time
+            // The 2.0/3.0 is a fudge factor
+            float uv_frequency_span = (subgrid_size - kernel_size) * 2.0/3.0;
 
-                // Determine number of timesteps in current aterm
-                const unsigned nr_timesteps_per_aterm = next_aterms_offset - current_aterms_offset;
+            float u = uvw(bl, time_offset0).u;
+            float v = uvw(bl, time_offset0).v;
+            float w = uvw(bl, time_offset0).w;
+
+            float baseline_length = std::sqrt(u*u + v*v + w*w);
+
+            std::vector<std::pair<int,int>> channel_groups = make_channel_groups(baseline_length, uv_frequency_span, image_size, frequencies);
+
+            for(auto &channel_group: channel_groups) {
+
+                int channel_begin = channel_group.first;
+                int channel_end = channel_group.second;
+                unsigned int nr_channels_in_group = channel_end - channel_begin;
+
+//                 #pragma omp critical
+//                 std::cout << channel_begin << " - " << channel_end << std::endl;
+
+                // Initialize subgrid
+                Subgrid subgrid(kernel_size, subgrid_size, grid_size, w_step, nr_w_layers);
 
                 // Compute uv coordinates in pixels
                 struct DataPoint {
@@ -249,46 +335,43 @@ namespace idg {
                     float w_lambda;
                 };
 
-                std::vector<DataPoint> datapoints(nr_timesteps_per_aterm * nr_channels);
+                std::vector<DataPoint> datapoints(nr_timesteps * nr_channels_in_group);
 
-                for (unsigned t = 0; t < nr_timesteps_per_aterm; t++) {
-                    for (unsigned c = 0; c < nr_channels; c++) {
+                for (unsigned t = 0; t < nr_timesteps; t++) {
+                    for (unsigned c = 0; c < nr_channels_in_group; c++) {
                         // U,V in meters
-                        float u_meters = uvw(bl, current_aterms_offset + t).u;
-                        float v_meters = uvw(bl, current_aterms_offset + t).v;
-                        float w_meters = uvw(bl, current_aterms_offset + t).w;
+                        float u_meters = uvw(bl, t).u;
+                        float v_meters = uvw(bl, t).v;
+                        float w_meters = uvw(bl, t).w;
 
-                        float u_pixels = meters_to_pixels(u_meters, image_size, frequencies(c));
-                        float v_pixels = meters_to_pixels(v_meters, image_size, frequencies(c));
+                        float u_pixels = meters_to_pixels(u_meters, image_size, frequencies(c + channel_begin));
+                        float v_pixels = meters_to_pixels(v_meters, image_size, frequencies(c + channel_begin));
 
-                        float w_lambda = meters_to_lambda(w_meters, frequencies(c));
+                        float w_lambda = meters_to_lambda(w_meters, frequencies(c + channel_begin));
 
-                        datapoints[t*nr_channels + c] = {t, c, u_pixels, v_pixels, w_lambda};
-                    }
+                        datapoints[t*nr_channels_in_group + c] = {t, c + channel_begin, u_pixels, v_pixels, w_lambda};
+                    } // end for channel
                 } // end for time
 
-                // Initialize subgrid
-                Subgrid subgrid(kernel_size, subgrid_size, grid_size, w_step, nr_w_layers);
-
-                unsigned time_offset = 0;
-                while (time_offset < nr_timesteps_per_aterm) {
-                    // Load first visibility
-                    DataPoint first_datapoint = datapoints[time_offset*nr_channels];
-                    const int first_timestep = first_datapoint.timestep;
-
+                unsigned int time_offset = time_offset0;
+                while (time_offset < nr_timesteps) {
                     // Create subgrid
                     subgrid.reset();
                     int nr_timesteps_subgrid = 0;
 
+                    // Load first visibility
+                    DataPoint first_datapoint = datapoints[time_offset*nr_channels_in_group];
+                    const int first_timestep = first_datapoint.timestep;
+
                     // Iterate all datapoints
-                    for (; time_offset < nr_timesteps_per_aterm; time_offset++) {
+                    for (; time_offset < nr_timesteps; time_offset++) {
                         // Visibility for first channel
-                        DataPoint visibility0 = datapoints[time_offset*nr_channels];
+                        DataPoint visibility0 = datapoints[time_offset*nr_channels_in_group];
                         const float u_pixels0 = visibility0.u_pixels;
                         const float v_pixels0 = visibility0.v_pixels;
                         const float w_lambda0 = visibility0.w_lambda;
 
-                        DataPoint visibility1 = datapoints[time_offset*nr_channels + nr_channels - 1];
+                        DataPoint visibility1 = datapoints[(time_offset+1)*nr_channels_in_group - 1];
                         const float u_pixels1 = visibility1.u_pixels;
                         const float v_pixels1 = visibility1.v_pixels;
 
@@ -305,7 +388,7 @@ namespace idg {
 
                     // Handle empty subgrid
                     if (nr_timesteps_subgrid == 0) {
-                        DataPoint visibility = datapoints[time_offset*nr_channels];
+                        DataPoint visibility = datapoints[time_offset*nr_channels_in_group];
                         const float u_pixels = visibility.u_pixels;
                         const float v_pixels = visibility.v_pixels;
 
@@ -320,19 +403,26 @@ namespace idg {
                         }
                     }
 
+                    // Compute time index for first visibility on subgrid
+                    auto time_index = bl * nr_timesteps + first_timestep;
+
                     // Finish subgrid
                     subgrid.finish();
 
                     // Add subgrid to metadata
                     if (subgrid.in_range()) {
                         Metadata m = {
-                            (int) (bl * nr_timesteps),                      // baseline offset, TODO: store bl index
-                            (int) (current_aterms_offset + first_timestep), // time offset, TODO: store time index
-                            nr_timesteps_subgrid,                   // nr of timesteps
-                            (int) aterm_index,                      // aterm index
-                            baseline,                               // baselines
-                            subgrid.get_coordinate()                // coordinate
+                            .time_index       = (int) time_index,                               // time index
+                            .nr_timesteps     = nr_timesteps_subgrid,                           // nr of timesteps
+                            .channel_begin    = channel_begin,
+                            .channel_end      = channel_end,
+                            .baseline         = baseline,                                       // baselines
+                            .coordinate       = subgrid.get_coordinate(),                       // coordinate
+                            .wtile_coordinate = subgrid.get_wtile_coordinate(),                 // tile coordinate
+                            .wtile_index      = -1,                                             // tile index, to be filled in combine step
+                            .nr_aterms        = -1                                              // nr of aterms, to be filled in later
                         };
+
                         metadata_[bl].push_back(m);
 
                         // Add additional subgrids for subsequent frequencies
@@ -346,14 +436,12 @@ namespace idg {
                                 metadata_[bl].push_back(m);
                             }
                         }
-                    }
-                    else if (plan_strict)
-                    {
+                    } else if (plan_strict) {
                         #pragma omp critical
                         throw std::runtime_error("subgrid falls not within grid");
                     }
                 } // end while
-            } // end for timeslot
+            } // end for channel_groups
         } // end for bl
 
         // Combine data structures
@@ -366,12 +454,20 @@ namespace idg {
 
             for (unsigned i = 0; i < metadata_[bl].size(); i++) {
                 Metadata& m = metadata_[bl][i];
+                int subgrid_index = metadata.size();
+
+                // Set wtile_index
+                Coordinate& wtile_coordinate = m.wtile_coordinate;
+                m.wtile_index = wtiles.add_subgrid(subgrid_index, wtile_coordinate);
 
                 // Append subgrid
                 metadata.push_back(metadata_[bl][i]);
 
-                // Accumulate timesteps
-                total_nr_timesteps += m.nr_timesteps;
+                // Accumulate timesteps, taking only the
+                // first channel group into account
+                if (m.channel_begin == 0) {
+                    total_nr_timesteps += m.nr_timesteps;
+                }
             }
 
             // Set total total number of timesteps for baseline
@@ -383,8 +479,48 @@ namespace idg {
             total_nr_visibilities_per_baseline.push_back(total_nr_visibilities);
         } // end for bl
 
+        // Reserve aterm indices
+        aterm_indices.reserve(nr_baselines * nr_timesteps);
+
+        // Set aterm index for every timestep
+        for (unsigned bl = 0; bl < nr_baselines; bl++) {
+            for (unsigned timeslot = 0; timeslot < nr_timeslots; timeslot++) {
+                // Get aterm offset
+                const unsigned current_aterms_offset = aterms_offsets(timeslot);
+                const unsigned next_aterms_offset    = aterms_offsets(timeslot+1);
+
+                // The aterm index is equal to the timeslot
+                const unsigned aterm_index = timeslot;
+
+                // Determine number of timesteps in current aterm
+                const unsigned nr_timesteps_per_aterm = next_aterms_offset - current_aterms_offset;
+
+                for (unsigned timestep = 0; timestep < nr_timesteps_per_aterm; timestep++) {
+                    aterm_indices.push_back(aterm_index);
+                }
+            }
+        }
+
+        // Set nr_aterms
+        for (Metadata &m : metadata) {
+            auto aterm_index = aterm_indices[m.time_index];
+            auto nr_aterms = 1;
+            for (auto time = 0; time < m.nr_timesteps; time++) {
+                auto aterm_index_current = aterm_indices[m.time_index + time];
+                if (aterm_index != aterm_index_current) {
+                    nr_aterms++;
+                    aterm_index = aterm_index_current;
+                }
+            }
+
+            m.nr_aterms = nr_aterms;
+        }
+
         // Set sentinel
         subgrid_offset.push_back(metadata.size());
+
+        m_wtile_initialize_set = wtiles.get_initialize_set();
+        m_wtile_flush_set = wtiles.get_flush_set();
 
         #if defined(DEBUG)
         cout << "Plan::" << __func__ << endl;
@@ -452,10 +588,14 @@ namespace idg {
         return accumulate(begin, end, 0);
     }
 
-    int Plan::get_max_nr_timesteps() const {
-        return *max_element(
-            total_nr_timesteps_per_baseline.begin(),
-            total_nr_timesteps_per_baseline.end());
+    int Plan::get_max_nr_timesteps_subgrid() const {
+        auto max_nr_timesteps = metadata[0].nr_timesteps;
+        for (const Metadata& m : metadata) {
+            if (m.nr_timesteps > max_nr_timesteps) {
+                max_nr_timesteps = m.nr_timesteps;
+            }
+        }
+        return max_nr_timesteps;
     }
 
     int Plan::get_nr_visibilities() const {
@@ -483,6 +623,11 @@ namespace idg {
 
     void Plan::copy_metadata(void *ptr) const {
         memcpy(ptr, get_metadata_ptr(), get_nr_subgrids() * sizeof(Metadata));
+    }
+
+    const int* Plan::get_aterm_indices_ptr(int bl) const {
+        auto offset = get_subgrid_offset(bl);
+        return &(aterm_indices[offset]);
     }
 
     void Plan::initialize_job(
@@ -526,26 +671,22 @@ namespace idg {
         // Sanity check
         assert((unsigned) get_nr_baselines() == nr_baselines);
 
-        // Find offset for first subgrid
-        const Metadata& m0 = metadata[0];
-        int baseline_offset_1 = m0.baseline_offset;
-
         // Iterate all metadata elements
         int nr_subgrids = get_nr_subgrids();
         for (int i = 0; i < nr_subgrids; i++) {
             const Metadata& m_current = metadata[i];
 
             // Determine which visibilities are used in the plan
-            unsigned current_offset       = (m_current.baseline_offset - baseline_offset_1) + m_current.time_offset;
+            unsigned time_index           = m_current.time_index;
             unsigned current_nr_timesteps = m_current.nr_timesteps;
 
             // Determine which visibilities to mask
-            unsigned first = current_offset + current_nr_timesteps;
+            unsigned first = time_index + current_nr_timesteps;
             unsigned last = 0;
             if (i < nr_subgrids-1) {
                 const Metadata& m_next = metadata[i+1];
-                int next_offset = (m_next.baseline_offset - baseline_offset_1) + m_next.time_offset;
-                last = next_offset;
+                int next_index = m_next.time_index;
+                last = next_index;
             } else {
                 last = nr_baselines * nr_timesteps;
             }

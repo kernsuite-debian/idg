@@ -6,6 +6,10 @@
 
 #include "idg-common.h"
 
+namespace cu {
+    class Stream;
+}
+
 namespace idg {
     namespace kernel {
         namespace cuda {
@@ -41,10 +45,28 @@ namespace idg {
                         const unsigned int grid_size = 0,
                         const float fraction_reserved = 0.1);
 
+                    void enqueue_copy(
+                        cu::Stream& stream,
+                        void *dst,
+                        void *src,
+                        size_t bytes);
+
                 protected:
                     void init_devices();
                     void free_devices();
                     static ProxyInfo default_info();
+
+                    struct {
+                        unsigned int nr_stations  = 0;
+                        unsigned int nr_timeslots = 0;
+                        unsigned int nr_timesteps = 0;
+                        unsigned int nr_channels  = 0;
+                        unsigned int subgrid_size = 0;
+                        unsigned int grid_size    = 0;
+                        unsigned int nr_baselines = 0;
+                        std::vector<int> jobsize;
+                        std::vector<int> max_nr_subgrids;
+                    } m_gridding_state;
 
                 private:
                     ProxyInfo &mInfo;

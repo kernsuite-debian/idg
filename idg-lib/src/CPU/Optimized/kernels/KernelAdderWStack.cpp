@@ -1,10 +1,9 @@
 #include <complex>
 
-#include <stdlib.h>
-#include <stdint.h>
 #include <omp.h>
 
 #include "Types.h"
+#include "Index.h"
 
 extern "C" {
 void kernel_adder_wstack(
@@ -32,6 +31,7 @@ void kernel_adder_wstack(
     {
         int num_threads = omp_get_num_threads();
         int thread_id = omp_get_thread_num();
+
         for (int s = 0; s < nr_subgrids; s++) {
             // Load subgrid coordinates
             int subgrid_x = metadata[s].coordinate.x;
@@ -48,7 +48,7 @@ void kernel_adder_wstack(
 
             // Check whether subgrid fits in grid
             if (!(subgrid_x >= 1 && subgrid_x < grid_size-subgrid_size &&
-                subgrid_y >= 1 && subgrid_y < grid_size-subgrid_size)) continue;
+                  subgrid_y >= 1 && subgrid_y < grid_size-subgrid_size)) continue;
 
             // Determine polarization index
             const int index_pol_default[NR_POLARIZATIONS]    = {0, 1, 2, 3};
@@ -82,10 +82,8 @@ void kernel_adder_wstack(
                     // Add subgrid value to grid
                     for (int pol = 0; pol < NR_POLARIZATIONS; pol++) {
                         int pol_dst = index_pol[pol];
-                        long dst_idx = index_grid(
-                            NR_POLARIZATIONS, grid_size, subgrid_w, pol_dst, y_dst, x_dst);
-                        long src_idx = index_subgrid(
-                            NR_POLARIZATIONS, subgrid_size, s, pol, y_src, x_src);
+                        long dst_idx = index_grid(grid_size, subgrid_w, pol_dst, y_dst, x_dst);
+                        long src_idx = index_subgrid(subgrid_size, s, pol, y_src, x_src);
                         idg::float2 value = phasor * subgrid[src_idx];
                         value = negative_w ? conj(value) : value;
                         grid[dst_idx] += value;

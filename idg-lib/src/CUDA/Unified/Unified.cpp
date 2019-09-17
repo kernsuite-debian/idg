@@ -72,25 +72,26 @@ namespace idg {
                     int max_nr_subgrids = plan.get_max_nr_subgrids(0, nr_baselines, max_jobsize);
 
                     // Static memory
-                    device.get_device_wavenumbers(nr_channels);
-                    device.get_device_spheroidal(subgrid_size);
-                    device.get_device_aterms(nr_stations, nr_timeslots, subgrid_size);
+                    device.allocate_device_wavenumbers(nr_channels);
+                    device.allocate_device_spheroidal(subgrid_size);
+                    device.allocate_device_aterms(nr_stations, nr_timeslots, subgrid_size);
+                    device.allocate_device_aterms_indices(nr_baselines, nr_timesteps);
 
                     unsigned int avg_aterm_correction_subgrid_size = m_avg_aterm_correction.size() ? subgrid_size : 0;
-                    device.get_device_avg_aterm_correction(avg_aterm_correction_subgrid_size);
+                    device.allocate_device_avg_aterm_correction(avg_aterm_correction_subgrid_size);
 
                     // Dynamic memory (per thread)
                     for (int t = 0; t < nr_streams; t++) {
-                        device.get_device_visibilities(t, jobsize[d], nr_timesteps, nr_channels);
-                        device.get_device_uvw(t, jobsize[d], nr_timesteps);
-                        device.get_device_subgrids(t, max_nr_subgrids, subgrid_size);
-                        device.get_device_metadata(t, max_nr_subgrids);
+                        device.allocate_device_visibilities(t, jobsize[d], nr_timesteps, nr_channels);
+                        device.allocate_device_uvw(t, jobsize[d], nr_timesteps);
+                        device.allocate_device_subgrids(t, max_nr_subgrids, subgrid_size);
+                        device.allocate_device_metadata(t, max_nr_subgrids);
                     }
 
                     // Host memory
                     if (d == 0) {
-                        device.get_host_visibilities(nr_baselines, nr_timesteps, nr_channels, visibilities);
-                        device.get_host_uvw(nr_baselines, nr_timesteps, uvw);
+                        device.register_host_visibilities(nr_baselines, nr_timesteps, nr_channels, visibilities);
+                        device.register_host_uvw(nr_baselines, nr_timesteps, uvw);
                     }
                 }
 
@@ -170,14 +171,13 @@ namespace idg {
                 powerStates[1] = hostPowerSensor->read();
                 powerStates[3] = device.measure();
 
-                #if defined(REPORT_TOTAL)
+                // Report performance
                 report.update_grid_fft(powerRecords[0].state, powerRecords[1].state);
                 report.update_fft_shift(time_shift);
                 report.update_fft_scale(time_scale);
                 report.print_total();
                 report.print_device(powerStates[2], powerStates[3]);
                 clog << endl;
-                #endif
             } // end transform
 
 
@@ -190,7 +190,7 @@ namespace idg {
                 const unsigned int subgrid_size,
                 const Array1D<float>& frequencies,
                 const Array3D<Visibility<std::complex<float>>>& visibilities,
-                const Array2D<UVWCoordinate<float>>& uvw,
+                const Array2D<UVW<float>>& uvw,
                 const Array1D<std::pair<unsigned int,unsigned int>>& baselines,
                 Grid& grid,
                 const Array4D<Matrix2x2<std::complex<float>>>& aterms,
@@ -259,14 +259,15 @@ namespace idg {
                     device.set_context();
 
                     // Load memory objects
-                    cu::DeviceMemory& d_wavenumbers  = device.get_device_wavenumbers();
-                    cu::DeviceMemory& d_spheroidal   = device.get_device_spheroidal();
-                    cu::DeviceMemory& d_aterms       = device.get_device_aterms();
-                    cu::DeviceMemory& d_avg_aterm_correction = device.get_device_avg_aterm_correction();
-                    cu::DeviceMemory& d_visibilities = device.get_device_visibilities(local_id);
-                    cu::DeviceMemory& d_uvw          = device.get_device_uvw(local_id);
-                    cu::DeviceMemory& d_subgrids     = device.get_device_subgrids(local_id, max_nr_subgrids, subgrid_size);
-                    cu::DeviceMemory& d_metadata     = device.get_device_metadata(local_id, max_nr_subgrids);
+                    cu::DeviceMemory& d_wavenumbers  = device.retrieve_device_wavenumbers();
+                    cu::DeviceMemory& d_spheroidal   = device.retrieve_device_spheroidal();
+                    cu::DeviceMemory& d_aterms       = device.retrieve_device_aterms();
+                    cu::DeviceMemory& d_aterms_indices       = device.retrieve_device_aterms_indices();
+                    cu::DeviceMemory& d_avg_aterm_correction = device.retrieve_device_avg_aterm_correction();
+                    cu::DeviceMemory& d_visibilities = device.retrieve_device_visibilities(local_id);
+                    cu::DeviceMemory& d_uvw          = device.retrieve_device_uvw(local_id);
+                    cu::DeviceMemory& d_subgrids     = device.allocate_device_subgrids(local_id, max_nr_subgrids, subgrid_size);
+                    cu::DeviceMemory& d_metadata     = device.allocate_device_metadata(local_id, max_nr_subgrids);
 
                     // Load streams
                     cu::Stream& executestream = device.get_execute_stream();
@@ -278,6 +279,7 @@ namespace idg {
                         htodstream.memcpyHtoDAsync(d_wavenumbers, wavenumbers.data());
                         htodstream.memcpyHtoDAsync(d_spheroidal, spheroidal.data());
                         htodstream.memcpyHtoDAsync(d_aterms, aterms.data());
+                        htodstream.memcpyHtoDAsync(d_aterms_indices, plan.get_aterm_indices_ptr());
                         htodstream.synchronize();
                         device.set_report(report);
                     }
@@ -326,12 +328,8 @@ namespace idg {
                             executestream.waitEvent(inputReady);
                             device.launch_gridder(
                                 current_nr_subgrids, grid_size, subgrid_size, image_size, w_step, nr_channels, nr_stations,
-                                d_uvw, d_wavenumbers, d_visibilities, d_spheroidal, d_aterms, d_avg_aterm_correction, d_metadata, d_subgrids);
-
-                            // Launch gridder post-processing kernel
-                            device.launch_gridder_post(
-                                current_nr_subgrids, subgrid_size, nr_stations,
-                                d_spheroidal, d_aterms, d_avg_aterm_correction, d_metadata, d_subgrids);
+                                d_uvw, d_wavenumbers, d_visibilities, d_spheroidal,
+                                d_aterms, d_aterms_indices, d_avg_aterm_correction, d_metadata, d_subgrids);
 
                             // Launch FFT
                             device.launch_fft(d_subgrids, FourierDomainToImageDomain);
@@ -370,7 +368,7 @@ namespace idg {
                 get_device(0).tile_backward(tile_size, grid_tiled, grid);
                 #endif
 
-                #if defined(REPORT_VERBOSE) || defined(REPORT_TOTAL)
+                // Report performance
                 auto total_nr_subgrids        = plan.get_nr_subgrids();
                 auto total_nr_timesteps       = plan.get_nr_timesteps();
                 auto total_nr_visibilities    = plan.get_nr_visibilities();
@@ -379,7 +377,6 @@ namespace idg {
                 report.print_devices(startStates, endStates);
                 report.print_visibilities(auxiliary::name_gridding, total_nr_visibilities);
                 clog << endl;
-                #endif
             } // end gridding
 
 
@@ -392,7 +389,7 @@ namespace idg {
                 const unsigned int subgrid_size,
                 const Array1D<float>& frequencies,
                 Array3D<Visibility<std::complex<float>>>& visibilities,
-                const Array2D<UVWCoordinate<float>>& uvw,
+                const Array2D<UVW<float>>& uvw,
                 const Array1D<std::pair<unsigned int,unsigned int>>& baselines,
                 const Grid& grid,
                 const Array4D<Matrix2x2<std::complex<float>>>& aterms,
@@ -461,13 +458,14 @@ namespace idg {
                     device.set_context();
 
                     // Load memory objects
-                    cu::DeviceMemory& d_wavenumbers  = device.get_device_wavenumbers();
-                    cu::DeviceMemory& d_spheroidal   = device.get_device_spheroidal();
-                    cu::DeviceMemory& d_aterms       = device.get_device_aterms();
-                    cu::DeviceMemory& d_visibilities = device.get_device_visibilities(local_id);
-                    cu::DeviceMemory& d_uvw          = device.get_device_uvw(local_id);
-                    cu::DeviceMemory& d_subgrids     = device.get_device_subgrids(local_id);
-                    cu::DeviceMemory& d_metadata     = device.get_device_metadata(local_id);
+                    cu::DeviceMemory& d_wavenumbers  = device.retrieve_device_wavenumbers();
+                    cu::DeviceMemory& d_spheroidal   = device.retrieve_device_spheroidal();
+                    cu::DeviceMemory& d_aterms       = device.retrieve_device_aterms();
+                    cu::DeviceMemory& d_aterms_indices = device.retrieve_device_aterms_indices();
+                    cu::DeviceMemory& d_visibilities = device.retrieve_device_visibilities(local_id);
+                    cu::DeviceMemory& d_uvw          = device.retrieve_device_uvw(local_id);
+                    cu::DeviceMemory& d_subgrids     = device.allocate_device_subgrids(local_id, max_nr_subgrids, subgrid_size);
+                    cu::DeviceMemory& d_metadata     = device.allocate_device_metadata(local_id, max_nr_subgrids);
 
                     // Load streams
                     cu::Stream& executestream = device.get_execute_stream();
@@ -479,6 +477,7 @@ namespace idg {
                         htodstream.memcpyHtoDAsync(d_wavenumbers, wavenumbers.data());
                         htodstream.memcpyHtoDAsync(d_spheroidal, spheroidal.data());
                         htodstream.memcpyHtoDAsync(d_aterms, aterms.data());
+                        htodstream.memcpyHtoDAsync(d_aterms_indices, plan.get_aterm_indices_ptr());
                         htodstream.synchronize();
                         device.set_report(report);
                     }
@@ -539,16 +538,12 @@ namespace idg {
                             executestream.waitEvent(uvwReady);
                             device.launch_fft(d_subgrids, ImageDomainToFourierDomain);
 
-                            // Launch degridder pre-processing kernel
-                            device.launch_degridder_pre(
-                                current_nr_subgrids, subgrid_size, nr_stations,
-                                d_spheroidal, d_aterms, d_metadata, d_subgrids);
-
                             // Launch degridder kernel
                             executestream.waitEvent(outputFree);
                             device.launch_degridder(
                                 current_nr_subgrids, grid_size, subgrid_size, image_size, w_step, nr_channels, nr_stations,
-                                d_uvw, d_wavenumbers, d_visibilities, d_spheroidal, d_aterms, d_metadata, d_subgrids);
+                                d_uvw, d_wavenumbers, d_visibilities, d_spheroidal,
+                                d_aterms, d_aterms_indices, d_metadata, d_subgrids);
                             executestream.record(outputReady);
 
                             // Copy visibilities to host
@@ -576,7 +571,7 @@ namespace idg {
                 endStates[nr_devices] = hostPowerSensor->read();
                 report.update_host(startStates[nr_devices], endStates[nr_devices]);
 
-                #if defined(REPORT_VERBOSE) || defined(REPORT_TOTAL)
+                // Report performance
                 auto total_nr_subgrids          = plan.get_nr_subgrids();
                 auto total_nr_timesteps         = plan.get_nr_timesteps();
                 auto total_nr_visibilities      = plan.get_nr_visibilities();
@@ -585,7 +580,6 @@ namespace idg {
                 report.print_devices(startStates, endStates);
                 report.print_visibilities(auxiliary::name_degridding, total_nr_visibilities);
                 clog << endl;
-                #endif
             } // end degridding
 
 
