@@ -660,20 +660,6 @@ def get_zero_visibilities(nr_baselines, nr_time, nr_channels, nr_polarizations,
                           dtype=visibilitiestype, info=False):
     visibilities = numpy.zeros(shape=(nr_baselines, nr_time, nr_channels, nr_polarizations),
                                dtype=visibilitiestype)
-    """Initialize visibilities to zero"""
-    lib.utils_init_zero_visibilities.argtypes = [ctypes.c_void_p,
-                                                 ctypes.c_int,
-                                                 ctypes.c_int,
-                                                 ctypes.c_int,
-                                                 ctypes.c_int]
-    lib.utils_init_zero_visibilities(visibilities.ctypes.data_as(ctypes.c_void_p),
-                                     ctypes.c_int(nr_baselines),
-                                     ctypes.c_int(nr_time),
-                                     ctypes.c_int(nr_channels),
-                                     ctypes.c_int(nr_polarizations) )
-    if info==True:
-        print "visibilities: numpy.ndarray(shape = (nr_baselines, nr_time, nr_channels, nr_polarizations), " + \
-                                           "dtype = " + str(dtype) + ")"
     return visibilities.astype(dtype=dtype)
 
 
@@ -750,6 +736,19 @@ def init_example_spheroidal(spheroidal):
                                                   ctypes.c_int]
     lib.utils_init_example_spheroidal(spheroidal.ctypes.data_as(ctypes.c_void_p),
                                       ctypes.c_int(subgrid_size) )
+
+def init_example_aterms(aterms, nr_timeslots, nr_stations, height, width):
+    """Initialize aterms"""
+    lib.utils_init_example_aterms_offset.argtypes = [ctypes.c_void_p,
+                                                     ctypes.c_int,
+                                                     ctypes.c_int,
+                                                     ctypes.c_int,
+                                                     ctypes.c_int]
+    lib.utils_init_example_aterms(aterms.ctypes.data_as(ctypes.c_void_p),
+                                         ctypes.c_int(nr_timeslots),
+                                         ctypes.c_int(nr_stations),
+                                         ctypes.c_int(height),
+                                         ctypes.c_int(width))
 
 
 def init_example_aterms_offset(aterms_offset, nr_time):
@@ -829,7 +828,7 @@ def get_example_aterms(nr_timeslots, nr_stations, subgrid_size, nr_polarizations
     aterms = numpy.zeros(
         (nr_timeslots, nr_stations, subgrid_size, subgrid_size, nr_polarizations),
         dtype = atermtype)
-    init_identity_aterms(aterms)
+    init_example_aterms(aterms, nr_timeslots, nr_stations, subgrid_size, subgrid_size)
     if info==True:
         print "aterms: numpy.ndarray(shape = (nr_timeslots, nr_stations," + \
               "subgrid_size, subgrid_size, nr_polarizations), " + \

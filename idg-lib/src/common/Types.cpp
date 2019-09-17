@@ -20,10 +20,8 @@ namespace idg {
 
     ostream& operator<<(ostream &out, Metadata &m) {
         out << "["
-            << "baseline_offset = " << m.baseline_offset << ",\n"
-            << "time_offset = "<< m.time_offset << ",\n"
+            << "time_index = "<< m.time_index << ",\n"
             << "nr_timesteps = "<< m.nr_timesteps << ",\n"
-            << "aterm_index = " << m.aterm_index << ",\n"
             << "baseline = "<< m.baseline << ",\n"
             << "coordinate = "<< m.coordinate
             << "]";
@@ -31,14 +29,13 @@ namespace idg {
     }
 
     template<class T>
-    ostream& operator<<(ostream &out, UVWCoordinate<T> &uvw) {
+    ostream& operator<<(ostream &out, UVW<T> &uvw) {
         out << "("
             << uvw.u << ","
             << uvw.v << ","
             << uvw.w << ")";
         return out;
     }
-
 
     ostream& operator<<(ostream& os, const float2& x)
     {

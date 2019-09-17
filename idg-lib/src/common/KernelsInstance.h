@@ -40,6 +40,15 @@ namespace idg {
                     const Grid& grid_src,
                           Grid& grid_dst) const;
 
+                void transpose_aterm(
+                    const Array4D<Matrix2x2<std::complex<float>>>& aterms_src,
+                          Array4D<std::complex<float>>& aterms_dst) const;
+
+                /*
+                    Debug
+                 */
+                void print_memory_info();
+
                 /*
                     Performance reporting
                 */
