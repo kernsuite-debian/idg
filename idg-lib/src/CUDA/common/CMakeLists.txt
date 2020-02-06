@@ -31,8 +31,9 @@ add_library(
                            ${${PROJECT_NAME}_sources}
 )
 if (NOT BUILD_STATIC_LIBS)
-set_target_properties (
-    ${PROJECT_NAME} PROPERTIES COMPILE_FLAGS "-fPIC"
+set_target_properties (${PROJECT_NAME} PROPERTIES
+        COMPILE_FLAGS "-fPIC"
+        SOVERSION 0
 )
 endif()
 
@@ -45,10 +46,7 @@ install(
     kernels/KernelScaler.cu
     kernels/KernelAdder.cu
     kernels/KernelSplitter.cu
-    kernels/KernelGridderPost.cu
-    kernels/KernelDegridderPre.cu
-    kernels/KernelGridderOne.cu
-    kernels/KernelDegridderOne.cu
+    kernels/KernelCalibrate.cu
     kernels/math.cu
     kernels/Types.h
     DESTINATION

@@ -111,110 +111,69 @@ namespace api {
         m_aterm_offsets_array = Array1D<unsigned int>(m_aterm_offsets.data(), m_aterm_offsets.size());
         m_aterms_array = Array4D<Matrix2x2<complex<float>>>(m_aterms.data(), m_aterm_offsets_array.get_x_dim()-1, m_nrStations, m_subgridsize, m_subgridsize);
 
+        // Set Plan options
         Plan::Options options;
-
-        options.w_step = m_wStepInLambda;
+        options.w_step      = m_wStepInLambda;
         options.nr_w_layers = m_nr_w_layers;
         options.plan_strict = false;
 
+        // Iterate all channel groups
         const int nr_channel_groups = m_channel_groups.size();
-        Plan* plans[nr_channel_groups];
-        std::mutex locks[nr_channel_groups];
         for (int i = 0; i < nr_channel_groups; i++) {
-            locks[i].lock();
-        }
-        omp_set_nested(true);
+            #ifndef NDEBUG
+            std::cout << "degridding channels: " << m_channel_groups[i].first << "-"
+                                                 << m_channel_groups[i].second << std::endl;
+            #endif
 
-        /*
-         * Start two threads:
-         *  thread 0: create plans
-         *  thread 1: execute these plans
-         */
-        #pragma omp parallel num_threads(2)
-        {
-            // Create plans
-            if (omp_get_thread_num() == 0) {
-                for (int i = 0; i < nr_channel_groups; i++) {
-#ifndef NDEBUG
-                    std::cout << "planning channels: " << m_channel_groups[i].first << "-" <<
- m_channel_groups[i].second << std::endl;
-#endif
-                    Plan* plan = new Plan(
-                        m_kernel_size,
-                        m_subgridsize,
-                        m_gridHeight,
-                        m_cellHeight,
-                        m_grouped_frequencies[i],
-                        m_bufferUVW,
-                        m_bufferStationPairs,
-                        m_aterm_offsets_array,
-                        options);
+            // Create plan
+            Plan plan(
+                m_kernel_size,
+                m_subgridsize,
+                m_gridHeight,
+                m_cellHeight,
+                m_grouped_frequencies[i],
+                m_bufferUVW,
+                m_bufferStationPairs,
+                m_aterm_offsets_array,
+                options);
 
-                    plans[i] = plan;
-                    locks[i].unlock();
-                } // end for i
-            } // end create plans
+            // Initialize degridding for first channel group
+            if (i == 0) {
+                m_proxy->initialize(
+                    plan,
+                    m_wStepInLambda,
+                    m_shift,
+                    m_cellHeight,
+                    m_kernel_size,
+                    m_subgridsize,
+                    m_grouped_frequencies[i],
+                    m_bufferVisibilities[i],
+                    m_bufferUVW,
+                    m_bufferStationPairs,
+                    *m_grid,
+                    m_aterms_array,
+                    m_aterm_offsets_array,
+                    m_spheroidal);
+            }
 
-            // Execute plans
-            if (omp_get_thread_num() == 1) {
-                for (int i = 0; i < nr_channel_groups; i++) {
-                    // Wait for plan to become available
-                    locks[i].lock();
-                    Plan *plan = plans[i];
+            // Start flush
+            m_proxy->run_degridding(
+                plan,
+                m_wStepInLambda,
+                m_shift,
+                m_cellHeight,
+                m_kernel_size,
+                m_subgridsize,
+                m_grouped_frequencies[i],
+                m_bufferVisibilities[i],
+                m_bufferUVW,
+                m_bufferStationPairs,
+                *m_grid,
+                m_aterms_array,
+                m_aterm_offsets_array,
+                m_spheroidal);
 
-                    if (i == 0) {
-                        Array3D<Visibility<std::complex<float>>>& visibilities_src = m_bufferVisibilities[i];
-
-                        m_proxy->initialize(
-                            *plan,
-                            m_wStepInLambda,
-                            m_shift,
-                            m_cellHeight,
-                            m_kernel_size,
-                            m_subgridsize,
-                            m_grouped_frequencies[i],
-                            visibilities_src,
-                            m_bufferUVW,
-                            m_bufferStationPairs,
-                            *m_grid,
-                            m_aterms_array,
-                            m_aterm_offsets_array,
-                            m_spheroidal);
-                    }
-
-                    // Start flush
-#ifndef NDEBUG
-                    std::cout << "degridding channels: " << m_channel_groups[i].first << "-" << m_channel_groups[i].second << std::endl;
-#endif
-                    m_proxy->run_degridding(
-                        *plan,
-                        m_wStepInLambda,
-                        m_shift,
-                        m_cellHeight,
-                        m_kernel_size,
-                        m_subgridsize,
-                        m_grouped_frequencies[i],
-                        m_bufferVisibilities[i],
-                        m_bufferUVW,
-                        m_bufferStationPairs,
-                        *m_grid,
-                        m_aterms_array,
-                        m_aterm_offsets_array,
-                        m_spheroidal);
-
-                } // end for i
-                // Wait for all plans to be executed
-                m_proxy->finish_degridding();
-            } // end execute plans
-        } // end omp parallel
-
-        // Cleanup plans
-        for (int i = 0; i < nr_channel_groups; i++) {
-            delete plans[i];
-        }
-
-        // copy data from per channel buffer into buffer for all channels
-        for (int i = 0; i < nr_channel_groups; i++) {
+            // Copy data from per channel buffer into buffer for all channels
             for (int bl = 0; bl < m_nr_baselines; bl++) {
                 for (int time_idx = 0;  time_idx < m_bufferTimesteps; time_idx++) {
                     std::copy(&m_bufferVisibilities[i](bl, time_idx, 0),
@@ -222,7 +181,10 @@ namespace api {
                             &m_bufferVisibilities2(bl, time_idx, m_channel_groups[i].first));
                 }
             }
-        }
+        } // end for i (channel groups)
+
+        // Wait for all plans to be executed
+        m_proxy->finish_degridding();
 
         // Prepare next batch
         m_timeStartThisBatch += m_bufferTimesteps;
@@ -254,56 +216,6 @@ namespace api {
       m_aterms.resize(atermBlockSize);
     }
 
-
-
-
-//     void DegridderBufferImpl::transform_grid(
-//         double crop_tolerance,
-//         size_t nr_polarizations,
-//         size_t height,
-//         size_t width,
-//         complex<double> *grid)
-//     {
-//         // Normal case: no arguments -> transform member grid
-//         // Note: the other case is to perform the transform on a copy
-//         // so that the process can be monitored
-//         if (grid == nullptr) {
-//             nr_polarizations = m_nrPolarizations;
-//             height           = m_gridHeight;
-//             width            = m_gridWidth;
-//             grid             = m_grid_double;
-//         }
-// 
-//         // FFT complex-to-complex for each polarization
-//         std::cout << "calling fft_grid" << std::endl;
-//         fft_grid(nr_polarizations, height, width, grid);
-//         std::cout << "returned from fft_grid" << std::endl;
-// 
-//         // // TODO: Apply spheroidal here as well?
-//         // Grid2D<float> spheroidal_grid(height, width);
-//         // resize2f(static_cast<int>(m_subgridsize),
-//         //          static_cast<int>(m_subgridsize),
-//         //          m_spheroidal.data(),
-//         //          static_cast<int>(height),
-//         //          static_cast<int>(width),
-//         //          spheroidal_grid.data());
-// 
-//         // for (auto pol = 0; pol < nr_polarizations; ++pol) {
-//         //     for (auto y = 0; y < height; ++y) {
-//         //         for (auto x = 0; x < width; ++x) {
-//         //             complex<double> scale;
-//         //             if (spheroidal_grid(y,x) >= crop_tolerance) {
-//         //                 scale = complex<double>(1.0/spheroidal_grid(y,x));
-//         //             } else {
-//         //                 scale = 0.0;
-//         //             }
-//         //             grid[pol*height*width + y*width + x] *= scale;
-//         //         }
-//         //     }
-//         // }
-//     }
-
-
     std::vector<std::pair<size_t, std::complex<float>*>> DegridderBufferImpl::compute()
     {
         flush();
@@ -330,92 +242,3 @@ namespace api {
 
 } // namespace api
 } // namespace idg
-
-
-
-// C interface:
-// Rationale: calling the code from C code and Fortran easier,
-// and bases to create interface to scripting languages such as
-// Python, Julia, Matlab, ...
-// extern "C" {
-//
-//     idg::api::DegridderBuffer* DegridderBuffer_init(unsigned int type,
-//                                            unsigned int bufferTimesteps)
-//     {
-//         auto proxytype = idg::api::Type::CPU_REFERENCE;
-//         if (type == 0) {
-//             proxytype = idg::api::Type::CPU_REFERENCE;
-//         } else if (type == 1) {
-//             proxytype = idg::api::Type::CPU_OPTIMIZED;
-//         }
-//         return new idg::api::DegridderBufferImpl(proxytype, bufferTimesteps);
-//     }
-//
-//     void DegridderBuffer_destroy(idg::api::DegridderBuffer* p) {
-//        delete p;
-//     }
-//
-//     // void DegridderBuffer_request_visibilities(
-//     //     idg::DegridderBuffer* p,
-//     //     int timeIndex,
-//     //     int antenna1,
-//     //     int antenna2,
-//     //     double* uvwInMeters)
-//     // {
-//     //     p->request_visibilities(
-//     //         timeIndex,
-//     //         antenna1,
-//     //         antenna2,
-//     //         uvwInMeters);
-//     // }
-//
-//     int DegridderBuffer_request_visibilities_with_rowid(
-//         idg::api::DegridderBuffer* p,
-//         int rowId,
-//         int timeIndex,
-//         int antenna1,
-//         int antenna2,
-//         double* uvwInMeters)
-//     {
-//         bool data_avail = p->request_visibilities(
-//             rowId,
-//             timeIndex,
-//             antenna1,
-//             antenna2,
-//             uvwInMeters);
-//         if (data_avail) return 1;
-//         else return 0;
-//     }
-//
-// //     void DegridderBuffer_read_visibilities(
-// //         idg::DegridderBuffer* p,
-// //         int timeIndex,
-// //         int antenna1,
-// //         int antenna2,
-// //         void* visibilities) // ptr to complex<float>
-// //     {
-// //         p->read_visibilities(
-// //             timeIndex,
-// //             antenna1,
-// //             antenna2,
-// //             (complex<float>*) visibilities);
-// //     }
-//
-//
-// //     void DegridderBuffer_transform_grid(
-// //         idg::api::DegridderBuffer* p,
-// //         double crop_tolarance,
-// //         int nr_polarizations,
-// //         int height,
-// //         int width,
-// //         void *grid)
-// //     {
-// //         p->transform_grid(
-// //             crop_tolarance,
-// //             nr_polarizations,
-// //             height,
-// //             width,
-// //             (complex<double> *) grid);
-// //     }
-//
-// } // extern C

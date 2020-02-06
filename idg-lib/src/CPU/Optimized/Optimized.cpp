@@ -21,11 +21,14 @@ namespace idg {
                 std::vector<std::string> libraries;
                 libraries.push_back(prefix + "gridder.so");
                 libraries.push_back(prefix + "degridder.so");
+                libraries.push_back(prefix + "calibrate.so");
                 libraries.push_back(prefix + "adder.so");
                 libraries.push_back(prefix + "splitter.so");
                 libraries.push_back(prefix + "fft.so");
                 libraries.push_back(prefix + "adder-wstack.so");
                 libraries.push_back(prefix + "splitter-wstack.so");
+                libraries.push_back(prefix + "adder-wtiles.so");
+                libraries.push_back(prefix + "splitter-wtiles.so");
                 return libraries;
             }
 

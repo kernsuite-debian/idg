@@ -1,3 +1,11 @@
+idg (0.6-1kern1) bionic; urgency=medium
+
+  [ Athanaseus Javas Ramaila ]
+  *  New upstream version 0.6
+
+ -- KERN packaging <packaging@kernsuite.info>  Tue, 17 Sep 2019 16:13:22 +0200
+
+
 idg (0.4+git20190106.4a78e2f-1) bionic; urgency=medium
 
   [ Gijs Molenaar ]

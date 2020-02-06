@@ -45,7 +45,7 @@ int test01()
     clog << ">>> Initialize data structures" << endl;
     idg::Array1D<float> frequencies =
         idg::get_example_frequencies(nr_channels);
-    idg::Array2D<idg::UVWCoordinate<float>> uvw =
+    idg::Array2D<idg::UVW<float>> uvw =
         idg::get_example_uvw(nr_stations, nr_baselines, nr_timesteps);
     idg::Array3D<idg::Visibility<std::complex<float>>> visibilities =
         idg::get_example_visibilities(uvw, frequencies, image_size, grid_size);
@@ -83,7 +83,7 @@ int test01()
     grid_ref(1, location_y, location_x) = amplitude;
     grid_ref(2, location_y, location_x) = amplitude;
     grid_ref(3, location_y, location_x) = amplitude;
-    memset(visibilities_ref.data(), 0, visibilities_ref.bytes());
+    visibilities_ref.zero();
     add_pt_src(visibilities_ref, uvw, frequencies, image_size, grid_size, offset_x, offset_y, amplitude);
     clog << endl;
 
