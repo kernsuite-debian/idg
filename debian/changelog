@@ -1,3 +1,10 @@
+idg (0.7-1kern3) bionic; urgency=medium
+
+  [ Gijs Molenaar ]
+  * make dev package depend on all libs
+
+ -- KERN packaging <packaging@kernsuite.info>  Wed, 06 May 2020 17:46:00 +0200
+
 idg (0.7-1kern2) bionic; urgency=medium
 
   [ Gijs Molenaar ]
