@@ -1,3 +1,12 @@
+idg (0.7-1kern1) bionic; urgency=medium
+
+  [ Gijs Molenaar ]
+  * new watch syntax
+  * New upstream version 0.7
+  * disable opencl for now (not working on focal)
+
+ -- KERN packaging <packaging@kernsuite.info>  Wed, 06 May 2020 13:59:53 +0200
+
 idg (0.4+git20190106.4a78e2f-1) bionic; urgency=medium
 
   [ Gijs Molenaar ]
