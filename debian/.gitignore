@@ -16,4 +16,6 @@ libidg-util0/
 libidg0/
 python3-idg/
 tmp/
+idg-dev/
+idg-doc/
 
