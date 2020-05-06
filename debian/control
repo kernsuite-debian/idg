@@ -6,10 +6,10 @@ Build-Depends:
  cmake,
  debhelper (>=11),
  dh-python,
- libclfft-dev,       
- dh-python,          
- python-all,         
- libfftw3-dev,       
+ libclfft-dev,
+ dh-python,
+ python-all,
+ libfftw3-dev,
  nvidia-cuda-toolkit,
  opencl-clhpp-headers,
  liblapack-dev,
@@ -19,8 +19,20 @@ Standards-Version: 4.5.0
 Homepage: https://gitlab.com/astron-idg/idg
 
 Package: idg-dev
+Section: libdevel
 Architecture: any
-Depends: ${misc:Depends}, ${shlibs:Depends}
+Multi-Arch: same
+Depends: libidg0 (= ${binary:Version}),
+         libidg-api0 (= ${binary:Version}),
+         libidg-common0 (= ${binary:Version}),
+         libidg-cpu0 (= ${binary:Version}),
+         libidg-cuda0 (= ${binary:Version}),
+         libidg-external0 (= ${binary:Version}),
+         libidg-fft0 (= ${binary:Version}),
+         libidg-hybrid-cuda0 (= ${binary:Version}),
+         libidg-util0 (= ${binary:Version}),
+         ${misc:Depends}
+Pre-Depends: ${misc:Pre-Depends}
 Description: Image Domain Gridding core library (development files)
 
 Package: libidg0
