@@ -6,6 +6,8 @@
 #include "BufferImpl.h"
 #include "BufferSetImpl.h"
 
+#include <csignal>
+
 
 using namespace std;
 
@@ -48,7 +50,7 @@ namespace api {
           m_aterms_array(0,0,0,0),
           m_bufferUVW(0,0),
           m_bufferStationPairs(0),
-          m_visibilities(0, 0, 0),
+          m_bufferVisibilities(0, 0, 0),
           m_proxy(proxy)
     {
         #if defined(DEBUG)
@@ -118,14 +120,14 @@ namespace api {
     {
         return m_wStepInLambda;
     }
-    
+
     void BufferImpl::set_shift(const float* shift)
     {
         m_shift(0) = shift[0];
         m_shift(1) = shift[1];
         m_shift(2) = shift[2];
     }
-    
+
     const idg::Array1D<float>& BufferImpl::get_shift() const
     {
         return m_shift;
@@ -172,7 +174,7 @@ namespace api {
 #ifndef NDEBUG
         std::cout << height << "," << width << std::endl;
 #endif
-        m_spheroidal = Array2D<float>(height, width);
+        m_spheroidal = m_proxy->allocate_array2d<float>(height, width);
         for (auto y = 0; y < height; ++y) {
             for (auto x = 0; x < width; x++) {
                 m_spheroidal(y, x) = float(spheroidal[y*width + x]);
@@ -186,7 +188,7 @@ namespace api {
         const double* frequencyList)
     {
         m_nr_channels = nr_channels;
-        m_frequencies = Array1D<float>(m_nr_channels);
+        m_frequencies = m_proxy->allocate_array1d<float>(m_nr_channels);
         for (int i=0; i<m_nr_channels; i++) {
             m_frequencies(i) = frequencyList[i];
         }
@@ -196,7 +198,7 @@ namespace api {
         const std::vector<double> &frequency_list)
     {
         m_nr_channels = frequency_list.size();
-        m_frequencies = Array1D<float>(m_nr_channels);
+        m_frequencies = m_proxy->allocate_array1d<float>(m_nr_channels);
         for (int i=0; i<m_nr_channels; i++) {
             m_frequencies(i) = frequency_list[i];
         }
@@ -214,9 +216,9 @@ namespace api {
     }
 
     void BufferImpl::set_grid(
-        Grid* grid)
+        std::shared_ptr<Grid> grid)
     {
-        m_grid        = grid;
+        m_grid = grid;
         m_gridHeight  = grid->get_x_dim();
         m_gridWidth   = grid->get_y_dim();
         m_nr_w_layers = grid->get_w_dim();
@@ -251,54 +253,7 @@ namespace api {
 
         // NOTE: assume m_gridWidth == m_gridHeight
 
-        // (1) Partition channels according to m_max_baseline and m_uv_span_frequency
-
-        float image_size = get_image_size();
-        float frequency = get_frequency(0);
-        float begin_pos = meters_to_pixels(m_max_baseline, image_size, frequency);
-
-        // The first channel group should be the largest, because the Proxy allocates buffers according to the size of the first group.
-        // max_nr_channels the maximum number of channels in a group. It is initially set the total number of channels.
-        // Once the first group is created it is set to the size of the first group.
-
-        int max_nr_channels = get_frequencies_size();
-
-        m_channel_groups.clear();
-        for (int begin_channel = 0; begin_channel < get_frequencies_size();)
-        {
-            float end_pos;
-            int end_channel;
-            for (end_channel = begin_channel+1; end_channel < (begin_channel + max_nr_channels); end_channel++)
-            {
-                frequency = get_frequency(end_channel);
-                end_pos = meters_to_pixels(m_max_baseline, image_size, frequency);
-
-                if (std::abs(begin_pos - end_pos) > m_uv_span_frequency) break;
-            }
-#ifndef NDEBUG
-            std::cout << begin_channel << "-" << end_channel << std::endl;
-#endif
-            // If this is the first group, reduce max_nr_channels to the size of this group
-            if (m_channel_groups.size() == 0) max_nr_channels = end_channel - begin_channel;
-
-            m_channel_groups.push_back(std::make_pair(begin_channel, end_channel));
-            begin_channel = end_channel;
-            begin_pos = end_pos;
-        }
-
-        m_grouped_frequencies.clear();
-        for (auto & channel_group : m_channel_groups)
-        {
-            int nr_channels = channel_group.second - channel_group.first;
-            Array1D<float> frequencies(nr_channels);
-            for (int i=0; i<nr_channels; i++)
-            {
-                frequencies(i) = m_frequencies(channel_group.first + i);
-            }
-            m_grouped_frequencies.push_back(std::move(frequencies));
-        }
-
-        // (2) Setup buffers
+        // Setup buffers
         malloc_buffers();
         reset_buffers(); // optimization: only call "set_uvw_to_infinity()" here
     }
@@ -306,19 +261,10 @@ namespace api {
 
     void BufferImpl::malloc_buffers()
     {
-        m_bufferUVW = Array2D<UVWCoordinate<float>>(m_nr_baselines, m_bufferTimesteps);
-        m_bufferVisibilities.clear();
-        int max_nr_channels = 0;
-        for (auto & channel_group : m_channel_groups)
-        {
-            int nr_channels = channel_group.second - channel_group.first;
-            if (nr_channels > max_nr_channels) {
-                max_nr_channels = nr_channels;
-            }
-            m_bufferVisibilities.push_back(Array3D<Visibility<std::complex<float>>>(m_nr_baselines, m_bufferTimesteps, nr_channels));
-        }
-        m_visibilities = Array3D<Visibility<std::complex<float>>>(m_nr_baselines, m_bufferTimesteps, max_nr_channels);
-        m_bufferStationPairs = Array1D<std::pair<unsigned int,unsigned int>>(m_nr_baselines);
+        m_bufferUVW = m_proxy->allocate_array2d<UVW<float>>(m_nr_baselines, m_bufferTimesteps);
+        m_bufferVisibilities = m_proxy->allocate_array3d<Visibility<std::complex<float>>>(m_nr_baselines, m_bufferTimesteps, m_nr_channels);
+        m_bufferStationPairs = m_proxy->allocate_array1d<std::pair<unsigned int,unsigned int>>(m_nr_baselines);
+        m_bufferStationPairs.init({m_nrStations, m_nrStations});
         // already done: m_spheroidal.reserve(m_subgridsize, m_subgridsize);
         // m_aterms = Array4D<Matrix2x2<std::complex<float>>>(1, m_nrStations, m_subgridsize, m_subgridsize);
     }
@@ -326,10 +272,7 @@ namespace api {
 
     void BufferImpl::reset_buffers()
     {
-        for (auto & buffer : m_bufferVisibilities)
-        {
-            buffer.init({0,0,0,0});
-        }
+        m_bufferVisibilities.zero();
         set_uvw_to_infinity();
         init_default_aterm();
     }
@@ -367,6 +310,7 @@ namespace api {
         int local_time = timeIndex - m_timeStartThisBatch;
         size_t n_old_aterms = m_aterm_offsets.size()-1;
         size_t atermBlockSize = m_nrStations*m_subgridsize*m_subgridsize;
+
         // Overwrite last a-term if new timeindex same as one but last element aterm_offsets
         if (local_time != m_aterm_offsets[m_aterm_offsets.size()-2]) {
           assert(local_time > m_aterm_offsets[m_aterm_offsets.size()-2]);
@@ -411,7 +355,7 @@ namespace api {
 //             throw invalid_argument("Grid height does not match.");
 //         if (width != m_gridWidth)
 //             throw invalid_argument("Grid width does not match.");
-// 
+//
 //         for (auto p = 0; p < m_nrPolarizations; ++p) {
 //             for (auto y = 0; y < m_gridHeight; ++y) {
 //                 for (auto x = 0; x < m_gridWidth; ++x) {
@@ -419,7 +363,7 @@ namespace api {
 //                          y*m_gridWidth + x] =
 //                     m_grid_double[p*m_gridHeight*m_gridWidth +
 //                                   y*m_gridWidth + x];
-// 
+//
 //                 }
 //             }
 //         }
@@ -494,7 +438,7 @@ extern "C" {
 //             width,
 //             (std::complex<float>*) grid);
 //     }
-// 
+//
 
     int Buffer_get_nr_polarizations(idg::api::BufferImpl* p)
     {

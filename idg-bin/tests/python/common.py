@@ -3,28 +3,26 @@
 # after INSTALLING the library, and sourcing init-enviroment.sh
 # (or setting the PYTHONPATH manually), you can import the idg module
 import idg
-import util
+import idg.util as util
+from idg.data import Data
 import numpy
 import matplotlib.pyplot as plt
 import random
 
-_nr_stations      = 3
-_nr_baselines     = _nr_stations*(_nr_stations-1)/2
+############
+# paramaters
+############
 _nr_channels      = 1
-_nr_timesteps     = 128          # samples per baseline
-_nr_timeslots     = 1             # A-term time slots
-_image_size       = 0.6
+_nr_timesteps     = 1*60*60        # samples per baseline
+_nr_timeslots     = 16             # A-term time slots
 _subgrid_size     = 32
-_grid_size        = 1024
-_integration_time = 1
-_kernel_size      = (_subgrid_size / 2) + 1
-_nr_correlations = 4
-
-def get_nr_stations():
-    return _nr_stations
-
-def get_nr_baselines():
-    return _nr_baselines
+_grid_size        = 2048
+_integration_time = 0.9
+_kernel_size      = 9
+_nr_correlations  = 4
+_layout_file      = "SKA1_low_ecef"
+_nr_stations      = 12
+_nr_baselines     = (_nr_stations * (_nr_stations - 1)) / 2
 
 def get_nr_channels():
     return _nr_channels
@@ -35,14 +33,8 @@ def get_nr_timesteps():
 def get_nr_timeslots():
     return _nr_timeslots
 
-def get_image_size():
-    return _image_size
-
 def get_subgrid_size():
     return _subgrid_size
-
-def get_cell_size():
-    return _image_size / _grid_size
 
 def get_grid_size():
     return _grid_size
@@ -56,15 +48,14 @@ def get_kernel_size():
 def get_nr_correlations():
     return _nr_correlations
 
-#################
-# initialize data
-#################
-def init_dummy_visibilities(nr_baselines, nr_timesteps, nr_channels):
-    visibilities =  numpy.ones(
-        (nr_baselines, nr_timesteps, nr_channels, _nr_correlations),
-        dtype = idg.visibilitiestype)
-    #util.plot_visibilities(visibilities)
-    return visibilities
+def get_layout_file():
+    return _layout_file
+
+def get_nr_stations():
+    return _nr_stations
+
+def get_nr_baselines():
+    return _nr_baselines
 
 
 ###########
@@ -94,10 +85,7 @@ def gridding(
         w_step, shift, cell_size, kernel_size, subgrid_size,
         frequencies, visibilities, uvw, baselines,
         grid, aterms, aterms_offsets, spheroidal)
-    #util.plot_grid(grid, scaling='log')
-    p.transform(idg.FourierDomainToImageDomain, grid)
-    #util.plot_grid(grid)
-    util.plot_grid(grid, pol=0)
+    #p.transform(idg.FourierDomainToImageDomain, grid)
 
 
 ############
@@ -111,7 +99,6 @@ def degridding(
         w_step, shift, cell_size, kernel_size, subgrid_size,
         frequencies, visibilities, uvw, baselines,
         grid, aterms, aterms_offsets, spheroidal)
-    #util.plot_visibilities(visibilities)
 
 
 def main(proxyname):
@@ -120,19 +107,18 @@ def main(proxyname):
     ######################################################################
     # Set parameters
     ######################################################################
-    nr_stations      = get_nr_stations()
-    nr_baselines     = get_nr_baselines()
     nr_channels      = get_nr_channels()
     nr_timesteps     = get_nr_timesteps()
     nr_timeslots     = get_nr_timeslots()
-    image_size       = get_image_size()
-    cell_size        = get_cell_size()
     subgrid_size     = get_subgrid_size()
     grid_size        = get_grid_size()
     integration_time = get_integration_time()
     kernel_size      = get_kernel_size()
     nr_correlations  = get_nr_correlations()
-    w_step         = 0.0
+    w_step           = 0.0
+    layout_file      = get_layout_file()
+    nr_stations      = get_nr_stations()
+    nr_baselines     = get_nr_baselines()
 
     ######################################################################
     # initialize proxies
@@ -140,6 +126,20 @@ def main(proxyname):
     ref = idg.CPU.Reference(nr_correlations, subgrid_size)
     p = ref
     opt = proxyname(nr_correlations, subgrid_size)
+
+    ######################################################################
+    # initialize data
+    ######################################################################
+    data                  = Data(layout_file)
+
+    # Limit baselines in length and number
+    max_uv = data.compute_max_uv(int(grid_size)) # m
+    data.limit_max_baseline_length(max_uv)
+    data.limit_nr_baselines(nr_baselines)
+
+    # Get remaining parameters
+    image_size = data.compute_image_size(grid_size)
+    cell_size  = image_size / grid_size
 
     ######################################################################
     # print parameters
@@ -158,51 +158,80 @@ def main(proxyname):
     ######################################################################
     # initialize data
     ######################################################################
-    uvw            = util.get_example_uvw(
-                        nr_baselines, nr_timesteps, integration_time)
-    frequencies    = util.get_example_frequencies(nr_channels)
+    channel_offset  = 0
+    baseline_offset = 0
+    time_offset     = 0
+
+    uvw            = numpy.zeros((nr_baselines, nr_timesteps), dtype=idg.uvwtype)
+    frequencies    = numpy.zeros((nr_channels), dtype=idg.frequenciestype)
+    data.get_frequencies(frequencies, nr_channels, image_size, channel_offset)
+    data.get_uvw(uvw, nr_baselines, nr_timesteps, baseline_offset, time_offset, integration_time)
+
     baselines      = util.get_example_baselines(nr_baselines)
-    grid           = util.get_example_grid(
-                        nr_correlations, grid_size)
-    grid2          = util.get_example_grid(
-                        nr_correlations, grid_size)
     aterms         = util.get_example_aterms(
                         nr_timeslots, nr_stations, subgrid_size, nr_correlations)
     aterms_offsets = util.get_example_aterms_offset(
                         nr_timeslots, nr_timesteps)
     spheroidal     = util.get_identity_spheroidal(subgrid_size)
-    visibilities   = util.get_example_visibilities(
-                        nr_baselines, nr_timesteps, nr_channels, nr_correlations,
-                        image_size, grid_size, uvw, frequencies)
-    visibilities2  = util.get_example_visibilities(
-                        nr_baselines, nr_timesteps, nr_channels, nr_correlations,
-                        image_size, grid_size, uvw, frequencies)
     shift          = numpy.zeros(3, dtype=float)
 
+    uvw['w'] = 0
+    ######################################################################
+    # initialize visibilities
+    ######################################################################
+    example_visibilities = util.get_example_visibilities(
+                        nr_baselines, nr_timesteps, nr_channels, nr_correlations,
+                        image_size, grid_size, uvw, frequencies)
 
     ######################################################################
-    # routines
+    # initialize empty grids and visibilities
+    ######################################################################
+    ref_grid = util.get_zero_grid(nr_correlations, grid_size)
+    opt_grid = util.get_zero_grid(nr_correlations, grid_size)
+    ref_visibilities = util.get_zero_visibilities(nr_baselines, nr_timesteps, nr_channels, nr_correlations)
+    opt_visibilities = util.get_zero_visibilities(nr_baselines, nr_timesteps, nr_channels, nr_correlations)
+
+    ######################################################################
+    # run gridding
     ######################################################################
     gridding(
-        opt, w_step, shift, cell_size, kernel_size, subgrid_size, frequencies, visibilities2,
-        uvw, baselines, grid2, aterms, aterms_offsets, spheroidal)
-
-    degridding(
-        opt, w_step, shift, cell_size, kernel_size, subgrid_size, frequencies, visibilities2,
-        uvw, baselines, grid2, aterms, aterms_offsets, spheroidal)
+        ref, w_step, shift, cell_size, kernel_size, subgrid_size, frequencies, example_visibilities,
+        uvw, baselines, opt_grid, aterms, aterms_offsets, spheroidal)
 
     gridding(
-        ref, w_step, shift, cell_size, kernel_size, subgrid_size, frequencies, visibilities,
-        uvw, baselines, grid, aterms, aterms_offsets, spheroidal)
+        opt, w_step, shift, cell_size, kernel_size, subgrid_size, frequencies, example_visibilities,
+        uvw, baselines, ref_grid, aterms, aterms_offsets, spheroidal)
+
+    ######################################################################
+    # plot difference between grids
+    ######################################################################
+    util.plot_grid(opt_grid, scaling='log')
+    util.plot_grid(ref_grid, scaling='log')
+    diff_grid = opt_grid - ref_grid
+    nnz = len(abs(diff_grid) > 0)
+    diff_grid = diff_grid / max(1, nnz)
+    util.plot_grid(diff_grid)
+    #plt.show()
+
+    ######################################################################
+    # run degridding
+    ######################################################################
+    degridding(
+        opt, w_step, shift, cell_size, kernel_size, subgrid_size, frequencies, ref_visibilities,
+        uvw, baselines, ref_grid, aterms, aterms_offsets, spheroidal)
 
     degridding(
-        ref, w_step, shift, cell_size, kernel_size, subgrid_size, frequencies, visibilities,
-        uvw, baselines, grid, aterms, aterms_offsets, spheroidal)
+        ref, w_step, shift, cell_size, kernel_size, subgrid_size, frequencies, opt_visibilities,
+        uvw, baselines, opt_grid, aterms, aterms_offsets, spheroidal)
 
     ######################################################################
     # plot difference between visibilities
     ######################################################################
-    #util.plot_visibilities(visibilities2 - visibilities)
-    #util.plot_visibilities(visibilities)
-    #util.plot_visibilities(visibilities2)
+    util.plot_visibilities(ref_visibilities)
+    util.plot_visibilities(opt_visibilities)
+    diff_visibilities = opt_visibilities - ref_visibilities
+    nnz = len(abs(diff_visibilities) > 0)
+    diff_visibilities = diff_visibilities / max(1, nnz)
+    util.plot_visibilities(diff_visibilities)
+
     plt.show()

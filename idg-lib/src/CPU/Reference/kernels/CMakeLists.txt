@@ -21,7 +21,7 @@ if (${CMAKE_CXX_COMPILER_ID} STREQUAL "Intel")
 else()
     add_compile_options("-fopenmp")
     if (BUILD_WITH_MKL)
-        add_compile_options("-lmkl")
+        link_libraries(${MKL_LIBRARIES})
     else()
         link_libraries(${FFTW3_LIBRARIES})
     endif()
@@ -36,6 +36,12 @@ add_library(${PROJECT_NAME}-degridder KernelDegridder.cpp)
 add_library(${PROJECT_NAME}-adder     KernelAdder.cpp)
 add_library(${PROJECT_NAME}-splitter  KernelSplitter.cpp)
 add_library(${PROJECT_NAME}-fft       KernelFFT.cpp)
+
+SET_TARGET_PROPERTIES(${PROJECT_NAME}-gridder PROPERTIES SOVERSION 0)
+SET_TARGET_PROPERTIES(${PROJECT_NAME}-degridder PROPERTIES SOVERSION 0)
+SET_TARGET_PROPERTIES(${PROJECT_NAME}-adder PROPERTIES SOVERSION 0)
+SET_TARGET_PROPERTIES(${PROJECT_NAME}-splitter PROPERTIES SOVERSION 0)
+SET_TARGET_PROPERTIES(${PROJECT_NAME}-fft PROPERTIES SOVERSION 0)
 
 # Copy kernel libraries
 install(

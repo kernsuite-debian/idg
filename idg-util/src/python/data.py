@@ -2,7 +2,7 @@ import numpy
 import ctypes
 import numpy.ctypeslib
 
-from idgtypes import *
+from idg.idgtypes import *
 
 # Load idg-util library
 lib = ctypes.cdll.LoadLibrary('libidg-util.so')
@@ -10,17 +10,12 @@ lib = ctypes.cdll.LoadLibrary('libidg-util.so')
 class Data():
     def __init__(
         self,
-        nr_stations_limit,
-        baseline_length_limit,
         layout_file):
+        lib.DATA_init.restype = ctypes.c_void_p
         lib.DATA_init.argtypes = [
-            ctypes.c_uint,
-            ctypes.c_uint,
             ctypes.c_char_p]
         self.obj = lib.DATA_init(
-            ctypes.c_uint(nr_stations_limit),
-            ctypes.c_uint(baseline_length_limit),
-            ctypes.c_char_p(layout_file))
+            ctypes.c_char_p(layout_file.encode('utf-8')))
 
     def compute_image_size(
         self,
@@ -31,38 +26,51 @@ class Data():
         lib.DATA_compute_image_size.restype = ctypes.c_float
         return lib.DATA_compute_image_size(self.obj, grid_size)
 
-    def compute_grid_size(
-        self,
-        image_size):
-        lib.DATA_compute_grid_size.argtypes = [
-            ctypes.c_void_p,
-            ctypes.c_float]
-        lib.DATA_compute_grid_size.restype = ctypes.c_float
-        return lib.DATA_compute_grid_size(self.obj, image_size)
-
     def compute_max_uv(
         self,
-        grid_size,
-        image_size):
+        grid_size):
         lib.DATA_compute_max_uv.argtypes = [
             ctypes.c_void_p,
-            ctypes.c_uint,
-            ctypes.c_float]
+            ctypes.c_ulong]
         lib.DATA_compute_max_uv.restype = ctypes.c_float
-        return lib.DATA_compute_max_uv(self.obj, grid_size, image_size)
+        return lib.DATA_compute_max_uv(self.obj, grid_size)
 
-    def filter_baselines(
+    def compute_grid_size(
+        self):
+        lib.DATA_compute_grid_size.argtypes = [
+            ctypes.c_void_p]
+        lib.DATA_compute_grid_size.restype = ctypes.c_uint
+        return lib.DATA_compute_grid_size(self.obj)
+
+    def limit_max_baseline_length(
         self,
-        grid_size,
-        image_size):
-        lib.DATA_filter_baselines.argtypes = [
+        max_uv):
+        lib.DATA_limit_max_baseline_length.argtypes = [
             ctypes.c_void_p,
-            ctypes.c_uint,
             ctypes.c_float]
-        lib.DATA_filter_baselines(
+        lib.DATA_limit_max_baseline_length(
             self.obj,
-            ctypes.c_uint(grid_size),
-            ctypes.c_float(image_size))
+            ctypes.c_float(max_uv))
+
+    def limit_nr_baselines(
+        self,
+        n):
+        lib.DATA_limit_nr_baselines.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_uint]
+        lib.DATA_limit_nr_baselines(
+            self.obj,
+            ctypes.c_uint(n))
+
+    def limit_nr_stations(
+        self,
+        n):
+        lib.DATA_limit_nr_stations.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_uint]
+        lib.DATA_limit_nr_stations(
+            self.obj,
+            ctypes.c_uint(n))
 
     def get_nr_stations(
         self):
@@ -118,3 +126,9 @@ class Data():
             ctypes.c_uint(baseline_offset),
             ctypes.c_uint(time_offset),
             ctypes.c_float(integration_time))
+
+    def print_info(
+        self):
+        lib.DATA_print_info.argtypes = [
+            ctypes.c_void_p]
+        lib.DATA_print_info(self.obj)

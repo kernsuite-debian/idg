@@ -2,17 +2,9 @@ import os
 import ctypes
 import numpy
 import numpy.ctypeslib
+import idg
 
-
-# A bit ugly, but ctypes.util's find_library does not look in
-# the LD_LIBRARY_PATH, but only PATH. Howver, we can also provide
-# the full path of the shared object file
-path = os.path.dirname(os.path.realpath(__file__))
-path, junk = os.path.split(path)
-path, junk = os.path.split(path)
-libpath = os.path.join(path, 'libidg-common.so')
-lib = ctypes.cdll.LoadLibrary(libpath)
-
+lib = idg.load_library('libidg-common.so')
 
 class Plan(object):
 
@@ -25,8 +17,7 @@ class Plan(object):
         frequencies,
         uvw,
         baselines,
-        aterms_offsets,
-        max_nr_timesteps_per_subgrid):
+        aterms_offsets):
 
         # extract dimensions
         nr_channels                  = frequencies.shape[0]
@@ -37,6 +28,23 @@ class Plan(object):
         baselines_two                = 2
         aterms_offsets_nr_timeslots  = aterms_offsets.shape[0]
 
+        lib.Plan_init.restype = ctypes.c_void_p
+        lib.Plan_init.argtypes = [
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_float,
+            ctypes.c_void_p,
+            ctypes.c_uint,
+            ctypes.c_void_p,
+            ctypes.c_uint,
+            ctypes.c_uint,
+            ctypes.c_uint,
+            ctypes.c_void_p,
+            ctypes.c_uint,
+            ctypes.c_uint,
+            ctypes.c_void_p,
+            ctypes.c_uint]
         self.obj = lib.Plan_init(
             ctypes.c_int(kernel_size),
             ctypes.c_int(subgrid_size),
@@ -52,21 +60,24 @@ class Plan(object):
             ctypes.c_uint(baselines_nr_baselines),
             ctypes.c_uint(baselines_two),
             aterms_offsets.ctypes.data_as(ctypes.c_void_p),
-            ctypes.c_uint(aterms_offsets_nr_timeslots),
-            ctypes.c_int(max_nr_timesteps_per_subgrid))
+            ctypes.c_uint(aterms_offsets_nr_timeslots))
 
 
     def __del__(self):
+        lib.Plan_destroy.argtypes = [ ctypes.c_void_p ]
         lib.Plan_destroy(self.obj)
 
-
     def get_nr_subgrids(self):
+        lib.Plan_get_nr_subgrids.restype = ctypes.c_int
+        lib.Plan_get_nr_subgrids.argtypes = [ ctypes.c_void_p ]
         return lib.Plan_get_nr_subgrids(self.obj)
 
     def copy_metadata(
         self,
         metadata):
+        lib.Plan_copy_metadata.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_void_p]
         lib.Plan_copy_metadata(
             self.obj,
             metadata.ctypes.data_as(ctypes.c_void_p))
-

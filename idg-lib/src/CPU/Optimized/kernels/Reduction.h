@@ -2,23 +2,64 @@
 #include <immintrin.h>
 #endif
 
-// http://bit.ly/2shIfmP
+#if defined(__PPC__)
+#include <altivec.h>
+#endif
+
 #if defined(__AVX__)
-inline float _mm256_reduce_add_ps(__m256 x) {
-    /* ( x3+x7, x2+x6, x1+x5, x0+x4 ) */
-    const __m128 x128 = _mm_add_ps(_mm256_extractf128_ps(x, 1),
-                                   _mm256_castps256_ps128(x));
-    /* ( -, -, x1+x3+x5+x7, x0+x2+x4+x6 ) */
-    const __m128 x64 = _mm_add_ps(x128,
-                                   _mm_movehl_ps(x128, x128));
-    /* ( -, -, -, x0+x1+x2+x3+x4+x5+x6+x7 ) */
-    const __m128 x32 = _mm_add_ss(x64,
-                                   _mm_shuffle_ps(x64, x64, 0x55));
-    /* Conversion to float is a no-op on x86-64 */
-    return _mm_cvtss_f32(x32);
+inline float _mm256_horizontal_add(__m256 x) {
+    /* x0, x1, x2, x3, x4, x5, x6, x7 */
+    __m256 x1 = x;
+
+    /* x0+x1, x2+x3, x0+x1, x2+x3, x4+x5, x6+x7, x4+x5, x6+x7 */
+    __m256 x2 = _mm256_hadd_ps(x1, x1);
+
+    /* x0+x1+x2+x3, -, -, -, x4+x5+x6+x7, -, -, - */
+    __m256 x3 = _mm256_hadd_ps(x2, x2);
+
+    /* x4+x5+x6+x7, -, -, - */
+    __m128 x4 = _mm256_extractf128_ps(x3, 1);
+
+    /* x0+x1+x2+x3, -, -, - */
+    __m128 x5 = _mm256_castps256_ps128(x3);
+
+    /* x0+x1+x2+x3+x4+x5+x6+x7, -, -, - */
+    __m128 x6 = _mm_add_ss(x4, x5);
+
+    return _mm_cvtss_f32(x6);
 }
 #endif
 
+// https://bit.ly/2UqZqAp
+#if defined(__AVX512F__)
+inline float _mm512_horizontal_add(__m512 x) {
+    /* x0, x1, x2, x3, x4, x5, x6, x7, x8, x9, x10, x11, x12, x13, x14, x15 */
+    __m512 x1 = x;
+
+    /* x8, x9, x10, x11, x12, x13, x14, x15, x0, x1, x2, x3, x4, x5, x6, x7 */
+    __m512 x2 = _mm512_shuffle_f32x4(x1,x1,_MM_SHUFFLE(0,0,3,2));
+
+    /* x0+x8, x1+x9, x2+x10, x3+x11, x4+x12, x5+x13, x6+x14, x7+x15, -, -, -, -, -, -, -, - */
+    __m512 x3 = _mm512_add_ps(x1, x2);
+
+    /* x4+x12, x5+x13, x6+x14, x7+x15, x0+x8, x1+x9, x2+x10, x3+x11, -, -, -, -, -, -, -, - */
+    __m512 x4 = _mm512_shuffle_f32x4(x3,x3,_MM_SHUFFLE(0,0,0,1));
+
+    /* x0+x8+x4+x12, x1+x9+x5+x13, x2+x10+x6+x14, x3+x11+x7+x15, -, -, -, -, -, -, -, -, -, -, -, - */
+    __m512 x5 = _mm512_add_ps(x3, x4);
+
+    /* x0+x8+x4+x12, x1+x9+x5+x13, x2+x10+x6+x14, x3+x11+x7+x15 */
+    __m128 x6 = _mm512_castps512_ps128(x5);
+
+    /* x0+x8+x4+x12+x1+x9+x5+x13, x2+x10+x6+x14+x3+x11+x7+x15, -, - */
+    __m128 x7 = _mm_hadd_ps(x6, x6);
+
+    /* x0+x8+x4+x12+x1+x9+x5+x13+x2+x10+x6+x14+x3+x11+x7+x15, -, - */
+    __m128 x8 = _mm_hadd_ps(x7, x7);
+
+    return  _mm_cvtss_f32(x8);
+}
+#endif
 inline void compute_reduction_scalar(
     int *offset,
     const int n,
@@ -83,7 +124,7 @@ inline void compute_reduction_scalar(
     output[3] += {output_yy_real, output_yy_imag};
 } // end compute_reduction_scalar
 
-inline void compute_reduction_avx2(
+inline void compute_reduction_avx_fma(
     int *offset,
     const int n,
     const float *input_xx_real,
@@ -98,7 +139,7 @@ inline void compute_reduction_avx2(
     const float *phasor_imag,
     idg::float2 output[NR_POLARIZATIONS])
 {
-#if defined(__AVX2__)
+#if defined(__FMA__)
     const int vector_length = 8;
 
     __m256 output_xx_r = _mm256_setzero_ps();
@@ -152,20 +193,114 @@ inline void compute_reduction_avx2(
 
     // Reduce all vectors
     if (n - *offset > 0) {
-        output[0].real += _mm256_reduce_add_ps(output_xx_r);
-        output[1].real += _mm256_reduce_add_ps(output_xy_r);
-        output[2].real += _mm256_reduce_add_ps(output_yx_r);
-        output[3].real += _mm256_reduce_add_ps(output_yy_r);
-        output[0].imag += _mm256_reduce_add_ps(output_xx_i);
-        output[1].imag += _mm256_reduce_add_ps(output_xy_i);
-        output[2].imag += _mm256_reduce_add_ps(output_yx_i);
-        output[3].imag += _mm256_reduce_add_ps(output_yy_i);
+        output[0].real += _mm256_horizontal_add(output_xx_r);
+        output[1].real += _mm256_horizontal_add(output_xy_r);
+        output[2].real += _mm256_horizontal_add(output_yx_r);
+        output[3].real += _mm256_horizontal_add(output_yy_r);
+        output[0].imag += _mm256_horizontal_add(output_xx_i);
+        output[1].imag += _mm256_horizontal_add(output_xy_i);
+        output[2].imag += _mm256_horizontal_add(output_yx_i);
+        output[3].imag += _mm256_horizontal_add(output_yy_i);
     }
-
 
     *offset += vector_length * ((n - *offset) / vector_length);
 #endif
-} // end compute_reduction_avx2
+} // end compute_reduction_avx_fma
+
+#if defined(__PPC__)
+inline float vec_sum(vector float a) {
+    const int vector_length = 4;
+
+    float sum = 0.0f;
+    for (unsigned short i = 0; i < vector_length; i++) {
+        sum += a[i];
+    }
+    return sum;
+}
+#endif
+
+inline void compute_reduction_altivec(
+    int *offset,
+    const int n,
+    const float *input_xx_real,
+    const float *input_xy_real,
+    const float *input_yx_real,
+    const float *input_yy_real,
+    const float *input_xx_imag,
+    const float *input_xy_imag,
+    const float *input_yx_imag,
+    const float *input_yy_imag,
+    const float *phasor_real,
+    const float *phasor_imag,
+    idg::float2 output[NR_POLARIZATIONS])
+{
+#if defined(__PPC__)
+    const int vector_length = 4;
+
+    vector float output_xx_r = vec_splats(0.0f);
+    vector float output_xy_r = vec_splats(0.0f);
+    vector float output_yx_r = vec_splats(0.0f);
+    vector float output_yy_r = vec_splats(0.0f);
+    vector float output_xx_i = vec_splats(0.0f);
+    vector float output_xy_i = vec_splats(0.0f);
+    vector float output_yx_i = vec_splats(0.0f);
+    vector float output_yy_i = vec_splats(0.0f);
+
+    for (int i = *offset; i < (n / vector_length) * vector_length; i += vector_length) {
+        vector float input_xx, input_xy, input_yx, input_yy;
+        vector float phasor_r, phasor_i;
+
+        phasor_r  = vec_ld(0, &phasor_real[i]);
+        phasor_i  = vec_ld(0, &phasor_imag[i]);
+
+        // Load real part of input
+        input_xx = vec_ld(0, &input_xx_real[i]);
+        input_xy = vec_ld(0, &input_xy_real[i]);
+        input_yx = vec_ld(0, &input_yx_real[i]);
+        input_yy = vec_ld(0, &input_yy_real[i]);
+
+        // Update output
+        output_xx_r = vec_add(output_xx_r, vec_mul(input_xx, phasor_r));
+        output_xx_i = vec_add(output_xx_i, vec_mul(input_xx, phasor_i));
+        output_xy_r = vec_add(output_xy_r, vec_mul(input_xy, phasor_r));
+        output_xy_i = vec_add(output_xy_i, vec_mul(input_xy, phasor_i));
+        output_yx_r = vec_add(output_yx_r, vec_mul(input_yx, phasor_r));
+        output_yx_i = vec_add(output_yx_i, vec_mul(input_yx, phasor_i));
+        output_yy_r = vec_add(output_yy_r, vec_mul(input_yy, phasor_r));
+        output_yy_i = vec_add(output_yy_i, vec_mul(input_yy, phasor_i));
+
+        // Load imag part of input
+        input_xx = vec_ld(0, &input_xx_imag[i]);
+        input_xy = vec_ld(0, &input_xy_imag[i]);
+        input_yx = vec_ld(0, &input_yx_imag[i]);
+        input_yy = vec_ld(0, &input_yy_imag[i]);
+
+        // Update output
+        output_xx_r = vec_sub(output_xx_r, vec_mul(input_xx, phasor_i));
+        output_xx_i = vec_add(output_xx_i, vec_mul(input_xx, phasor_r));
+        output_xy_r = vec_sub(output_xy_r, vec_mul(input_xy, phasor_i));
+        output_xy_i = vec_add(output_xy_i, vec_mul(input_xy, phasor_r));
+        output_yx_r = vec_sub(output_yx_r, vec_mul(input_yx, phasor_i));
+        output_yx_i = vec_add(output_yx_i, vec_mul(input_yx, phasor_r));
+        output_yy_r = vec_sub(output_yy_r, vec_mul(input_yy, phasor_i));
+        output_yy_i = vec_add(output_yy_i, vec_mul(input_yy, phasor_r));
+    }
+
+    // Reduce all vectors
+    if (n - *offset > 0) {
+        output[0].real += vec_sum(output_xx_r);
+        output[1].real += vec_sum(output_xy_r);
+        output[2].real += vec_sum(output_yx_r);
+        output[3].real += vec_sum(output_yy_r);
+        output[0].imag += vec_sum(output_xx_i);
+        output[1].imag += vec_sum(output_xy_i);
+        output[2].imag += vec_sum(output_yx_i);
+        output[3].imag += vec_sum(output_yy_i);
+    }
+
+    *offset += vector_length * ((n - *offset) / vector_length);
+#endif
+} // end compute_reduction_altivec
 
 inline void compute_reduction_avx(
     int *offset,
@@ -236,16 +371,15 @@ inline void compute_reduction_avx(
 
     // Reduce all vectors
     if (n - *offset > 0) {
-        output[0].real += _mm256_reduce_add_ps(output_xx_r);
-        output[1].real += _mm256_reduce_add_ps(output_xy_r);
-        output[2].real += _mm256_reduce_add_ps(output_yx_r);
-        output[3].real += _mm256_reduce_add_ps(output_yy_r);
-        output[0].imag += _mm256_reduce_add_ps(output_xx_i);
-        output[1].imag += _mm256_reduce_add_ps(output_xy_i);
-        output[2].imag += _mm256_reduce_add_ps(output_yx_i);
-        output[3].imag += _mm256_reduce_add_ps(output_yy_i);
+        output[0].real += _mm256_horizontal_add(output_xx_r);
+        output[1].real += _mm256_horizontal_add(output_xy_r);
+        output[2].real += _mm256_horizontal_add(output_yx_r);
+        output[3].real += _mm256_horizontal_add(output_yy_r);
+        output[0].imag += _mm256_horizontal_add(output_xx_i);
+        output[1].imag += _mm256_horizontal_add(output_xy_i);
+        output[2].imag += _mm256_horizontal_add(output_yx_i);
+        output[3].imag += _mm256_horizontal_add(output_yy_i);
     }
-
 
     *offset += vector_length * ((n - *offset) / vector_length);
 #endif
@@ -320,14 +454,14 @@ inline void compute_reduction_avx512(
 
     // Reduce all vectors
     if (n - *offset > 0) {
-        output[0].real += _mm512_reduce_add_ps(output_xx_r);
-        output[1].real += _mm512_reduce_add_ps(output_xy_r);
-        output[2].real += _mm512_reduce_add_ps(output_yx_r);
-        output[3].real += _mm512_reduce_add_ps(output_yy_r);
-        output[0].imag += _mm512_reduce_add_ps(output_xx_i);
-        output[1].imag += _mm512_reduce_add_ps(output_xy_i);
-        output[2].imag += _mm512_reduce_add_ps(output_yx_i);
-        output[3].imag += _mm512_reduce_add_ps(output_yy_i);
+        output[0].real += _mm512_horizontal_add(output_xx_r);
+        output[1].real += _mm512_horizontal_add(output_xy_r);
+        output[2].real += _mm512_horizontal_add(output_yx_r);
+        output[3].real += _mm512_horizontal_add(output_yy_r);
+        output[0].imag += _mm512_horizontal_add(output_xx_i);
+        output[1].imag += _mm512_horizontal_add(output_xy_i);
+        output[2].imag += _mm512_horizontal_add(output_yx_i);
+        output[3].imag += _mm512_horizontal_add(output_yy_i);
     }
 
     *offset += vector_length * ((n - *offset) / vector_length);
@@ -353,6 +487,14 @@ inline void compute_reduction(
     // Initialize output to zero
     memset(output, 0, NR_POLARIZATIONS * sizeof(idg::float2));
 
+    // Vectorized loop, 4-elements, altivec
+    compute_reduction_altivec(
+            &offset, n,
+            input_xx_real, input_xy_real, input_yx_real, input_yy_real,
+            input_xx_imag, input_xy_imag, input_yx_imag, input_yy_imag,
+            phasor_real, phasor_imag,
+            output);
+
     // Vectorized loop, 16-elements, AVX512
     compute_reduction_avx512(
             &offset, n,
@@ -361,8 +503,8 @@ inline void compute_reduction(
             phasor_real, phasor_imag,
             output);
 
-    // Vectorized loop, 8-elements, AVX2
-    compute_reduction_avx2(
+    // Vectorized loop, 8-elements, AVX FMA
+    compute_reduction_avx_fma(
             &offset, n,
             input_xx_real, input_xy_real, input_yx_real, input_yy_real,
             input_xx_imag, input_xy_imag, input_yx_imag, input_yy_imag,

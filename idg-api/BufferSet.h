@@ -35,6 +35,8 @@ namespace api {
 
         virtual ~BufferSet() {};
 
+        static uint64_t get_memory_per_timestep(size_t nStations, size_t nChannels);
+
         virtual void init(
             size_t width,
             float cellsize,

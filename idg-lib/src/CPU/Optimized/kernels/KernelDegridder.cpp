@@ -6,7 +6,9 @@
 #endif
 
 #include "Types.h"
+#include "Index.h"
 #include "Math.h"
+#include "Memory.h"
 
 extern "C" {
 
@@ -19,21 +21,18 @@ void kernel_degridder(
     const float* __restrict__        shift,
     const int                        nr_channels,
     const int                        nr_stations,
-    const idg::UVWCoordinate<float>* uvw,
+    const idg::UVW<float>*           uvw,
     const float*                     wavenumbers,
           idg::float2*               visibilities,
     const float*                     spheroidal,
     const idg::float2*               aterms,
+    const int*                       aterms_indices,
     const idg::Metadata*             metadata,
     const idg::float2*               subgrid)
 {
     #if defined(USE_LOOKUP)
-    CREATE_LOOKUP
+    initialize_lookup();
     #endif
-
-    // Find offset of first subgrid
-    const idg::Metadata m       = metadata[0];
-    const int baseline_offset_1 = m.baseline_offset;
 
     // Compute l,m,n
     const unsigned nr_pixels = subgrid_size*subgrid_size;
@@ -47,7 +46,7 @@ void kernel_degridder(
 
         l_[i] = compute_l(x, subgrid_size, image_size);
         m_[i] = compute_m(y, subgrid_size, image_size);
-        n_[i] = compute_n(l_[i], m_[i], shift);
+        n_[i] = compute_n(-l_[i], m_[i], shift);
     }
 
     // Iterate all subgrids
@@ -55,74 +54,33 @@ void kernel_degridder(
     for (int s = 0; s < nr_subgrids; s++) {
 
         // Load metadata
-        const idg::Metadata m  = metadata[s];
-        const int offset       = (m.baseline_offset - baseline_offset_1) + m.time_offset;
-        const int nr_timesteps = m.nr_timesteps;
-        const int aterm_index  = m.aterm_index;
-        const int station1     = m.baseline.station1;
-        const int station2     = m.baseline.station2;
-        const int x_coordinate = m.coordinate.x;
-        const int y_coordinate = m.coordinate.y;
+        const idg::Metadata m   = metadata[s];
+        const int time_offset   = m.time_index;
+        const int nr_timesteps  = m.nr_timesteps;
+        const int channel_begin = m.channel_begin;
+        const int channel_end   = m.channel_end;
+        const int station1      = m.baseline.station1;
+        const int station2      = m.baseline.station2;
+        const int x_coordinate  = m.coordinate.x;
+        const int y_coordinate  = m.coordinate.y;
         const float w_offset_in_lambda = w_step_in_lambda * (m.coordinate.z + 0.5);
 
-        // Storage
-        float pixels_xx_real[nr_pixels] __attribute__((aligned((ALIGNMENT))));
-        float pixels_xy_real[nr_pixels] __attribute__((aligned((ALIGNMENT))));
-        float pixels_yx_real[nr_pixels] __attribute__((aligned((ALIGNMENT))));
-        float pixels_yy_real[nr_pixels] __attribute__((aligned((ALIGNMENT))));
-        float pixels_xx_imag[nr_pixels] __attribute__((aligned((ALIGNMENT))));
-        float pixels_xy_imag[nr_pixels] __attribute__((aligned((ALIGNMENT))));
-        float pixels_yx_imag[nr_pixels] __attribute__((aligned((ALIGNMENT))));
-        float pixels_yy_imag[nr_pixels] __attribute__((aligned((ALIGNMENT))));
+        // Initialize aterm index to first timestep
+        size_t aterm_idx_previous = aterms_indices[time_offset];
 
-        // Apply aterm to subgrid
-        for (unsigned i = 0; i < nr_pixels; i++) {
-            int y = i / subgrid_size;
-            int x = i % subgrid_size;
-
-            // Load aterm for station1
-            size_t station1_idx = index_aterm(subgrid_size, NR_POLARIZATIONS, nr_stations, aterm_index, station1, y, x);
-            idg::float2 aXX1 = aterms[station1_idx + 0];
-            idg::float2 aXY1 = aterms[station1_idx + 1];
-            idg::float2 aYX1 = aterms[station1_idx + 2];
-            idg::float2 aYY1 = aterms[station1_idx + 3];
-
-            // Load aterm for station2
-            size_t station2_idx = index_aterm(subgrid_size, NR_POLARIZATIONS, nr_stations, aterm_index, station2, y, x);
-            idg::float2 aXX2 = aterms[station2_idx + 0];
-            idg::float2 aXY2 = aterms[station2_idx + 1];
-            idg::float2 aYX2 = aterms[station2_idx + 2];
-            idg::float2 aYY2 = aterms[station2_idx + 3];
-
-            // Load spheroidal
-            float _spheroidal = spheroidal[y * subgrid_size + x];
-
-            // Compute shifted position in subgrid
-            int x_src = (x + (subgrid_size/2)) % subgrid_size;
-            int y_src = (y + (subgrid_size/2)) % subgrid_size;
-
-            // Load pixel values and apply spheroidal
-            idg::float2 pixels[NR_POLARIZATIONS];
-            for (int pol = 0; pol < NR_POLARIZATIONS; pol++) {
-                size_t src_idx = index_subgrid(NR_POLARIZATIONS, subgrid_size, s, pol, y_src, x_src);
-                pixels[pol] = _spheroidal * subgrid[src_idx];
-            }
-
-            apply_aterm(
-                aXX1, aXY1, aYX1, aYY1,
-                aXX2, aXY2, aYX2, aYY2,
-                pixels);
-
-            // Store pixels
-            pixels_xx_real[i] = pixels[0].real;
-            pixels_xy_real[i] = pixels[1].real;
-            pixels_yx_real[i] = pixels[2].real;
-            pixels_yy_real[i] = pixels[3].real;
-            pixels_xx_imag[i] = pixels[0].imag;
-            pixels_xy_imag[i] = pixels[1].imag;
-            pixels_yx_imag[i] = pixels[2].imag;
-            pixels_yy_imag[i] = pixels[3].imag;
-        }
+        // Allocate memory
+        float* pixels_xx_real = allocate_memory<float>(nr_pixels);
+        float* pixels_xy_real = allocate_memory<float>(nr_pixels);
+        float* pixels_yx_real = allocate_memory<float>(nr_pixels);
+        float* pixels_yy_real = allocate_memory<float>(nr_pixels);
+        float* pixels_xx_imag = allocate_memory<float>(nr_pixels);
+        float* pixels_xy_imag = allocate_memory<float>(nr_pixels);
+        float* pixels_yx_imag = allocate_memory<float>(nr_pixels);
+        float* pixels_yy_imag = allocate_memory<float>(nr_pixels);
+        float* phasor_real    = allocate_memory<float>(nr_pixels);
+        float* phasor_imag    = allocate_memory<float>(nr_pixels);
+        float* phase          = allocate_memory<float>(nr_pixels);
+        float* phase_offset   = allocate_memory<float>(nr_pixels);
 
         // Compute u and v offset in wavelenghts
         const float u_offset = (x_coordinate + subgrid_size/2 - grid_size/2)
@@ -131,14 +89,23 @@ void kernel_degridder(
                                * (2*M_PI / image_size);
         const float w_offset = 2*M_PI * w_offset_in_lambda;
 
-        float phase_offset[nr_pixels];
-
         // Iterate all timesteps
         for (int time = 0; time < nr_timesteps; time++) {
             // Load UVW coordinates
-            float u = uvw[offset + time].u;
-            float v = uvw[offset + time].v;
-            float w = uvw[offset + time].w;
+            float u = uvw[time_offset + time].u;
+            float v = uvw[time_offset + time].v;
+            float w = uvw[time_offset + time].w;
+
+            // Get aterm indices for current timestep
+            size_t aterm_idx_current = aterms_indices[time_offset + time];
+
+            // Determine whether aterm has changed
+            #if defined(__PPC__) // workaround compiler bug
+            unsigned int aterm_changed;
+            #else
+            bool aterm_changed;
+            #endif
+            aterm_changed = aterm_idx_previous != aterm_idx_current;
 
             float phase_index[nr_pixels];
 
@@ -152,11 +119,51 @@ void kernel_degridder(
                 }
             }
 
-            // Iterate all channels
-            for (int chan = 0; chan < nr_channels; chan++) {
-                // Compute phase
-                float phase[nr_pixels];
+            // Apply aterm to subgrid
+            if (time == 0 || aterm_changed) {
+                for (unsigned i = 0; i < nr_pixels; i++) {
+                    int y = i / subgrid_size;
+                    int x = i % subgrid_size;
 
+                    // Load spheroidal
+                    float _spheroidal = spheroidal[y * subgrid_size + x];
+
+                    // Compute shifted position in subgrid
+                    int x_src = (x + (subgrid_size/2)) % subgrid_size;
+                    int y_src = (y + (subgrid_size/2)) % subgrid_size;
+
+                    // Load pixel values and apply spheroidal
+                    idg::float2 pixels[NR_POLARIZATIONS] __attribute__((aligned(ALIGNMENT)));
+                    for (int pol = 0; pol < NR_POLARIZATIONS; pol++) {
+                        size_t src_idx = index_subgrid(subgrid_size, s, pol, y_src, x_src);
+                        pixels[pol] = _spheroidal * subgrid[src_idx];
+                    }
+
+                    // Apply aterm
+                    size_t station1_idx = index_aterm(subgrid_size, nr_stations, aterm_idx_current, station1, y, x, 0);
+                    size_t station2_idx = index_aterm(subgrid_size, nr_stations, aterm_idx_current, station2, y, x, 0);
+                    idg::float2 *aterm1_ptr = (idg::float2 *) &aterms[station1_idx];
+                    idg::float2 *aterm2_ptr = (idg::float2 *) &aterms[station2_idx];
+                    apply_aterm_degridder(pixels, aterm1_ptr, aterm2_ptr);
+
+                    // Store pixels
+                    pixels_xx_real[i] = pixels[0].real;
+                    pixels_xy_real[i] = pixels[1].real;
+                    pixels_yx_real[i] = pixels[2].real;
+                    pixels_yy_real[i] = pixels[3].real;
+                    pixels_xx_imag[i] = pixels[0].imag;
+                    pixels_xy_imag[i] = pixels[1].imag;
+                    pixels_yx_imag[i] = pixels[2].imag;
+                    pixels_yy_imag[i] = pixels[3].imag;
+                }
+
+                // Update aterm index
+                aterm_idx_previous = aterm_idx_current;
+            }
+
+            // Iterate all channels
+            for (int chan = channel_begin; chan < channel_end; chan++) {
+                // Compute phase
                 for (unsigned i = 0; i < nr_pixels; i++) {
                     // Compute phase
                     float wavenumber = wavenumbers[chan];
@@ -164,13 +171,7 @@ void kernel_degridder(
                 }
 
                 // Compute phasor
-                float phasor_real[nr_pixels] __attribute__((aligned((ALIGNMENT))));;
-                float phasor_imag[nr_pixels] __attribute__((aligned((ALIGNMENT))));;
-                #if defined(USE_LOOKUP)
-                compute_sincos(nr_pixels, phase, lookup, phasor_imag, phasor_real);
-                #else
                 compute_sincos(nr_pixels, phase, phasor_imag, phasor_real);
-                #endif
 
                 // Compute visibilities
                 idg::float2 sums[NR_POLARIZATIONS];
@@ -183,15 +184,29 @@ void kernel_degridder(
 
                 // Store visibilities
                 const float scale = 1.0f / nr_pixels;
-                int time_idx = offset + time;
+                int time_idx = time_offset + time;
                 int chan_idx = chan;
-                size_t dst_idx = index_visibility( nr_channels, NR_POLARIZATIONS, time_idx, chan_idx, 0);
+                size_t dst_idx = index_visibility(nr_channels, time_idx, chan_idx, 0);
                 for (int pol = 0; pol < NR_POLARIZATIONS; pol++) {
                     visibilities[dst_idx+pol] = {scale*sums[pol].real, scale*sums[pol].imag};
                 }
             } // end for channel
         } // end for time
-    } // end #pragma parallel
+
+        // Free memory
+        free(pixels_xx_real);
+        free(pixels_xy_real);
+        free(pixels_yx_real);
+        free(pixels_yy_real);
+        free(pixels_xx_imag);
+        free(pixels_xy_imag);
+        free(pixels_yx_imag);
+        free(pixels_yy_imag);
+        free(phase);
+        free(phase_offset);
+        free(phasor_real);
+        free(phasor_imag);
+    } // end s
 } // end kernel_degridder
 
 } // end extern "C"

@@ -21,8 +21,8 @@ extern "C" {
          int nr_timesteps,
          float integration_time)
     {
-        idg::Array2D<idg::UVWCoordinate<float>> uvw(
-            (idg::UVWCoordinate<float> *) ptr, nr_baselines, nr_timesteps);
+        idg::Array2D<idg::UVW<float>> uvw(
+            (idg::UVW<float> *) ptr, nr_baselines, nr_timesteps);
         idg::Data data;
         data.get_uvw(uvw, 0, 0, integration_time);
     }
@@ -61,7 +61,7 @@ extern "C" {
         void *visibilities)
     {
         typedef idg::Matrix2x2<std::complex<float>> VisibilityType;
-        typedef idg::UVWCoordinate<float> UVWType;
+        typedef idg::UVW<float> UVWType;
         idg::Array3D<VisibilityType> visibilities_((VisibilityType *) visibilities, nr_baselines, nr_timesteps, nr_channels);
         idg::Array2D<UVWType> uvw_((UVWType *) uvw, nr_baselines, nr_timesteps);
         idg::Array1D<float> frequencies_((float *) frequencies, nr_channels);
@@ -77,6 +77,18 @@ extern "C" {
     {
         idg::Array4D<idg::Matrix2x2<std::complex<float>>> aterms =
             idg::get_identity_aterms(nr_timeslots, nr_stations, subgrid_size, subgrid_size);
+        memcpy(ptr, aterms.data(), aterms.bytes());
+    }
+
+    void utils_init_example_aterms(
+        void *ptr,
+        int nr_timeslots,
+        int nr_stations,
+        int subgrid_size,
+        int nr_polarizations)
+    {
+        idg::Array4D<idg::Matrix2x2<std::complex<float>>> aterms =
+            idg::get_example_aterms(nr_timeslots, nr_stations, subgrid_size, subgrid_size);
         memcpy(ptr, aterms.data(), aterms.bytes());
     }
 
@@ -98,79 +110,6 @@ extern "C" {
         idg::Array1D<std::pair<unsigned int,unsigned int>> baselines =
             idg::get_example_baselines(nr_stations, nr_baselines);
         memcpy(ptr, baselines.data(), baselines.bytes());
-    }
-
-    idg::Data* DATA_init(
-       unsigned int nr_stations_limit,
-       unsigned int baseline_length_limit,
-       const char *layout_file)
-    {
-        return new idg::Data(nr_stations_limit, baseline_length_limit, layout_file);
-    }
-
-    float DATA_compute_image_size(
-        idg::Data* data,
-        unsigned grid_size)
-    {
-        return data->compute_image_size(grid_size);
-    }
-
-    float DATA_compute_grid_size(
-        idg::Data* data,
-        float image_size)
-    {
-        return data->compute_grid_size(image_size);
-    }
-
-    float DATA_compute_max_uv(
-        unsigned grid_size,
-        float image_size)
-    {
-        return idg::Data::compute_max_uv(grid_size, image_size);
-    }
-
-    void DATA_filter_baselines(
-        idg::Data* data,
-        unsigned grid_size,
-        float image_size)
-    {
-        data->filter_baselines(grid_size, image_size);
-    }
-
-    float DATA_get_nr_stations(
-        idg::Data* data)
-    {
-        return data->get_nr_stations();
-    }
-
-    float DATA_get_nr_baselines(
-        idg::Data* data)
-    {
-        return data->get_nr_baselines();
-    }
-
-    void DATA_get_frequencies(
-        idg::Data* data,
-        void* ptr,
-        unsigned int nr_channels,
-        float image_size,
-        unsigned int channel_offset)
-    {
-        idg::Array1D<float> frequencies((float *) ptr, nr_channels);
-        data->get_frequencies(frequencies, image_size, channel_offset);
-    }
-
-    void DATA_get_uvw(
-        idg::Data* data,
-        void* ptr,
-        unsigned int nr_baselines,
-        unsigned int nr_timesteps,
-        unsigned int baseline_offset,
-        unsigned int time_offset,
-        float integration_time)
-    {
-        idg::Array2D<idg::UVWCoordinate<float>> uvw((idg::UVWCoordinate<float> *) ptr, nr_baselines, nr_timesteps);
-        data->get_uvw(uvw, baseline_offset, time_offset, integration_time);
     }
 
 }  // end extern "C"

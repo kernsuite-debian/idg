@@ -19,10 +19,11 @@ option (BUILD_LIB_OPENCL "Build OpenCL libraries" OFF)
 option (BUILD_WITH_PYTHON "Build Python bindings" OFF)
 option (BUILD_WITH_MKL "Build with MKL (if available)" OFF)
 option (BUILD_WITH_POWERSENSOR " Build with PowerSensor" OFF)
-option (REPORT_VERBOSE "Report detailed performance metrics" OFF)
-option (REPORT_TOTAL "Report total performance metrics" OFF)
-option (REPORT_OPS "Report performance in ops (fma, sincos) instead of flops (add, mul)" OFF)
+option (PERFORMANCE_REPORT "Report performance metrics" OFF)
 option (COMPILE_VERBOSE "Report compiler flags used during runtime compilation" OFF)
+option (STRICT_WARNINGS "Turn compiliation warnings into errors" ON)
+option (USE_LOOKUP_TABLE "Use sine/cosine lookup table" OFF)
+option (CUDA_KERNEL_DEBUG "Enable debug mode for CUDA kernels" OFF)
 
 # build shared or static libraries (default: shared)
 if (BUILD_STATIC_LIBS)
@@ -59,7 +60,7 @@ endif()
 
 # Set the warning level to all and treat all warnings as errors
 # TODO: setting of the flags is only applied when using a GNU compiler
-if (CMAKE_BUILD_TYPE STREQUAL "Debug" AND GNU_CXX_COMPILER)
+if (STRICT_WARNINGS AND CMAKE_BUILD_TYPE STREQUAL "Debug" AND GNU_CXX_COMPILER)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Werror")
 endif()
 
@@ -123,6 +124,11 @@ else()
 find_package(FFTW3 COMPONENTS single threads)
 endif()
 
+# CUDA
+if (BUILD_LIB_CUDA)
+find_package(CUDA QUIET)
+endif()
+
 include_directories (${CMAKE_CURRENT_BINARY_DIR}/src)
 
 # add main include folder
@@ -130,19 +136,6 @@ include_directories (${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 # add subfolders, after specifying the targets to build
 add_subdirectory(src)
-
-# write file to initialize environment
-configure_file (
-  "${PROJECT_SOURCE_DIR}/cmake/config/init-environment.sh.in"
-  "${PROJECT_BINARY_DIR}/init-environment.sh"
-  )
-
-install(
-    FILES
-    ${PROJECT_BINARY_DIR}/init-environment.sh
-    DESTINATION
-    ${CMAKE_INSTALL_PREFIX}
-)
 
 # write config file, included in all files of the project
 configure_file (
@@ -159,6 +152,7 @@ install(
 
 # Create idg-targets.cmake
 set(TARGETS_TO_EXPORT idg)
+set(TARGETS_TO_EXPORT ${TARGETS_TO_EXPORT} idg-external)
 set(TARGETS_TO_EXPORT ${TARGETS_TO_EXPORT} idg-common)
 set(TARGETS_TO_EXPORT ${TARGETS_TO_EXPORT} idg-fft)
 if (BUILD_LIB_CPU)
@@ -191,5 +185,5 @@ configure_file(
 
 install(
     FILES ${PROJECT_BINARY_DIR}/CMakeFiles/idg-config.cmake
-    DESTINATION ${CMAKE_INSTALL_PREFIX}
+    DESTINATION ${CMAKE_INSTALL_PREFIX}/share
 )

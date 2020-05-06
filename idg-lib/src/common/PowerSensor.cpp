@@ -1,8 +1,36 @@
+#include <vector>
+#include <iostream>
+
+#include "omp.h"
+
+#include "idg-config.h"
+
+#include "auxiliary.h"
+
+#if defined(HAVE_POWERSENSOR)
+#include "powersensor/LikwidPowerSensor.h"
+#include "powersensor/RaplPowerSensor.h"
+#include "powersensor/NVMLPowerSensor.h"
+#include "powersensor/ArduinoPowerSensor.h"
+#include "powersensor/AMDGPUPowerSensor.h"
+#define POWERSENSOR_DEFINED
+#endif
+
 #include "PowerSensor.h"
 
-#include "idg-common.h"
-
 namespace powersensor {
+
+    static std::string name_likwid("likwid");
+    static std::string name_rapl("rapl");
+    static std::string name_nvml("nvml");
+    static std::string name_arduino("tty");
+    static std::string name_amdgpu("amdgpu");
+
+    class DummyPowerSensor : public PowerSensor {
+        public:
+            DummyPowerSensor();
+            virtual State read();
+    };
 
     PowerSensor* get_power_sensor(
         const std::string name,
@@ -46,37 +74,28 @@ namespace powersensor {
         #endif
 
         // Use the DummyPowerSensor as backup
-        return powersensor::DummyPowerSensor::create();
+        return new DummyPowerSensor();
     }
 
-    class DummyPowerSensor_ : public DummyPowerSensor {
-        public:
-            virtual State read();
-            virtual double seconds(const State &firstState, const State &secondState) override;
-            virtual double Joules(const State &firstState, const State &secondState) override;
-            virtual double Watt(const State &firstState, const State &secondState) override;
-    };
+    PowerSensor::~PowerSensor() {};
 
-    DummyPowerSensor* DummyPowerSensor::create()
-    {
-        return new DummyPowerSensor_();
-    }
+    DummyPowerSensor::DummyPowerSensor() {}
 
-    State DummyPowerSensor_::read() {
+    State DummyPowerSensor::read() {
         State state;
         state.timeAtRead = omp_get_wtime();
         return state;
     }
 
-    double DummyPowerSensor_::seconds(const State &firstState, const State &secondState) {
+    double PowerSensor::seconds(const State &firstState, const State &secondState) {
         return secondState.timeAtRead - firstState.timeAtRead;
     }
 
-    double DummyPowerSensor_::Joules(const State &firstState, const State &secondState) {
+    double PowerSensor::Joules(const State &firstState, const State &secondState) {
         return secondState.joulesAtRead - firstState.joulesAtRead;
     }
 
-    double DummyPowerSensor_::Watt(const State &firstState, const State &secondState) {
+    double PowerSensor::Watt(const State &firstState, const State &secondState) {
         return Joules(firstState, secondState) /
                seconds(firstState, secondState);
     }

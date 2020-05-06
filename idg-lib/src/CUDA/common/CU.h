@@ -8,6 +8,9 @@
 #include <cuda.h>
 #include <nvToolsExt.h>
 
+#include "common/auxiliary.h"
+#include "idg-config.h"
+
 struct dim3;
 
 namespace cu {
@@ -75,31 +78,44 @@ namespace cu {
             CUdevice _device;
     };
 
-
-    class HostMemory {
+    class Memory : public idg::auxiliary::Memory {
         public:
-            HostMemory(size_t size, int flags = 0);
-            HostMemory(void *ptr, size_t size, int flags = 0, bool register_memory = true);
-            ~HostMemory();
-
-            size_t capacity();
-            size_t size();
-            void resize(size_t size);
-            void* get(size_t offset = 0);
-            void zero();
-
+            size_t capacity() { return m_capacity; }
+            void* ptr() { return m_ptr; }
+            size_t size() { return m_bytes; }
+            virtual void resize(size_t size) = 0;
             template <typename T> operator T *() {
-                return static_cast<T *>(_ptr);
+                return static_cast<T *>(m_ptr);
             }
+
+        protected:
+            size_t m_capacity = 0;
+    };
+
+    class HostMemory : public virtual Memory {
+        public:
+            HostMemory(size_t size = 0, int flags = CU_MEMHOSTALLOC_PORTABLE);
+            virtual ~HostMemory();
+
+            void resize(size_t size) override;
+            void zero();
 
         private:
             void release();
-            void *_ptr;
-            size_t _capacity;
-            size_t _size;
             int _flags;
-            bool allocated = false;
-            bool registered = false;
+    };
+
+    class RegisteredMemory : public virtual Memory {
+        public:
+            RegisteredMemory(void *ptr, size_t size, int flags = CU_MEMHOSTREGISTER_PORTABLE);
+            virtual ~RegisteredMemory();
+
+            void resize(size_t size) override;
+            void zero();
+
+        private:
+            void release();
+            int _flags;
     };
 
 
@@ -150,7 +166,9 @@ namespace cu {
             UnifiedMemory(size_t size, unsigned flags = CU_MEM_ATTACH_GLOBAL);
             ~UnifiedMemory();
 
-            void* ptr() { return (void *) _ptr; }
+            template <typename T> operator T *() {
+                return static_cast<T *>((void *) _ptr);
+            }
             void set_advice(CUmem_advise advise);
             void set_advice(CUmem_advise advise, Device& device);
 
@@ -220,10 +238,9 @@ namespace cu {
             Stream(int flags = CU_STREAM_DEFAULT);
             ~Stream();
 
-            void memcpyHtoDAsync(DeviceMemory &devPtr, const void *hostPtr);
             void memcpyHtoDAsync(CUdeviceptr devPtr, const void *hostPtr, size_t size);
-            void memcpyDtoHAsync(void *hostPtr, DeviceMemory &devPtr);
             void memcpyDtoHAsync(void *hostPtr, CUdeviceptr devPtr, size_t size);
+            void memcpyDtoDAsync(CUdeviceptr dstPtr, CUdeviceptr srcPtr, size_t size);
             void launchKernel(Function &function, unsigned gridX, unsigned gridY, unsigned gridZ, unsigned blockX, unsigned blockY, unsigned blockZ, unsigned sharedMemBytes, const void **parameters);
             void launchKernel(Function &function, dim3 grid, dim3 block, unsigned sharedMemBytes, const void **parameters);
             void query();
@@ -240,13 +257,21 @@ namespace cu {
 
     class Marker {
         public:
+            enum Color {
+                red , green, blue, yellow, black
+            };
+
             Marker(
                 const char *message,
                 unsigned color = 0xff00ff00);
+            Marker(
+                const char *message,
+                Marker::Color color);
             void start();
             void end();
 
         private:
+            unsigned int convert(Color color);
             nvtxEventAttributes_t _attributes;
             nvtxRangeId_t _id;
     };

@@ -12,9 +12,7 @@
 #cmakedefine BUILD_LIB_CUDA
 #cmakedefine BUILD_LIB_OPENCL
 #cmakedefine BUILD_WITH_PYTHON
-#cmakedefine REPORT_VERBOSE
-#cmakedefine REPORT_TOTAL
-#cmakedefine REPORT_OPS
+#cmakedefine PERFORMANCE_REPORT
 #cmakedefine COMPILE_VERBOSE
 
 #cmakedefine CLANG_CXX_COMPILER
@@ -32,5 +30,11 @@
 #define FFTW3F_LIB "@FFTW3F_LIBRARY@"
 
 #cmakedefine HAVE_POWERSENSOR
+
+#cmakedefine REGISTER_HOST_MEMORY
+
+#define NVCC "@CUDA_NVCC@"
+
+#cmakedefine CUDA_KERNEL_DEBUG
 
 #endif

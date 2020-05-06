@@ -119,13 +119,6 @@ namespace api {
         /** \brief Signal that the visibilities can be overwritten */
         virtual void finished_reading();
 
-        /** \brief Alias to call transform_grid()
-         * param crop_tolerance [in] ...
-         * param nr_polarizations [in] number of correlations (normally 4)
-         * param height [in] width in pixel
-         * param width [in] width in pixel
-         * param grid [in] complex<double>[nr_polarizations][height][width]
-         */
         /** \brief Explicitly flush the buffer */
         virtual void flush() override;
 
@@ -144,7 +137,6 @@ namespace api {
     private:
 
         // Data
-        Array3D<Visibility<std::complex<float>>> m_bufferVisibilities2;   // BL x TI x CH
         bool m_buffer_full;
         bool m_data_read;
         std::vector<std::pair<size_t, std::complex<float>*>> m_row_ids_to_data;

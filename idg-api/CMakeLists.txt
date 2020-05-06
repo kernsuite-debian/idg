@@ -105,11 +105,15 @@ set (${PROJECT_NAME}_sources
     taper.cpp
 )
 
+# enable rpath
+set(CMAKE_INSTALL_RPATH ${CUDA_LIB_DIR})
+set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+
 add_library(
   ${PROJECT_NAME} ${${PROJECT_NAME}_headers}
                   ${${PROJECT_NAME}_sources}
 )
-set_target_properties(${PROJECT_NAME} PROPERTIES COMPILE_FLAGS "-fPIC")
+set_target_properties(${PROJECT_NAME} PROPERTIES COMPILE_FLAGS "-fPIC" SOVERSION 0)
 target_link_libraries (
     ${PROJECT_NAME} 
     ${${PROJECT_NAME}_link_libraries}
@@ -144,14 +148,9 @@ install(EXPORT IDGAPITargets
         DESTINATION lib/cmake)
 
 configure_file(
-    "${PROJECT_SOURCE_DIR}/cmake/config/IDGAPIConfig.cmake.in"
-    "${PROJECT_BINARY_DIR}/CMakeFiles/IDGAPIConfig.cmake" @ONLY)
-
-configure_file(
-    "${PROJECT_SOURCE_DIR}/cmake/config/IDGAPIConfigVersion.cmake.in"
-    "${PROJECT_BINARY_DIR}/CMakeFiles/IDGAPIConfigVersion.cmake" @ONLY)
+    "${PROJECT_SOURCE_DIR}/cmake/config/idgapi-config.cmake.in"
+    "${PROJECT_BINARY_DIR}/CMakeFiles/idgapi-config.cmake" @ONLY)
 
 install(FILES
-    "${PROJECT_BINARY_DIR}/CMakeFiles/IDGAPIConfig.cmake"
-    "${PROJECT_BINARY_DIR}/CMakeFiles/IDGAPIConfigVersion.cmake"
-    DESTINATION ${CMAKE_INSTALL_PREFIX})
+    "${PROJECT_BINARY_DIR}/CMakeFiles/idgapi-config.cmake"
+    DESTINATION ${CMAKE_INSTALL_PREFIX}/share/idgapi/cmake)

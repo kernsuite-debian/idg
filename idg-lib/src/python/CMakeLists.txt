@@ -1,8 +1,6 @@
-set(PYTHON_INSTALL_DIR ${CMAKE_INSTALL_PREFIX}/lib/python2.7/dist-packages)
-
 # Install Python modules.
 install(FILES
-        idg.py
+        __init__.py
         idgtypes.py
         CPU.py
         CUDA.py
