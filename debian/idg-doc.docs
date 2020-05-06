@@ -1,0 +1,2 @@
+debian/tmp/usr/data/*.txt
+debian/tmp/usr/bin/examples
