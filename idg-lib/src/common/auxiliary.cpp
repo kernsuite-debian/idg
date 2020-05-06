@@ -2,9 +2,13 @@
 #include <iomanip>
 #include <cstdint>
 #include <omp.h>
+#include <sys/resource.h>
+#include <unistd.h>
+#include <string>
 
 #include "idg-config.h"
 #include "idg-common.h"
+#include "idg-version.h"
 #include "auxiliary.h"
 #include "PowerSensor.h"
 
@@ -28,9 +32,6 @@ namespace idg {
             flops_per_visibility += 5; // phase index
             flops_per_visibility += 5; // phase offset
             flops_per_visibility += nr_channels * 2; // phase
-            #if defined(REPORT_OPS)
-            flops_per_visibility += nr_channels * 2; // phasor
-            #endif
             flops_per_visibility += nr_channels * nr_correlations * 8; // update
 
             // Number of flops per subgrid
@@ -102,6 +103,40 @@ namespace idg {
             uint64_t nr_correlations)
         {
             return bytes_gridder(nr_channels, nr_timesteps, nr_subgrids, subgrid_size, nr_correlations);
+        }
+
+        uint64_t flops_calibrate(
+            uint64_t nr_terms,
+            uint64_t nr_channels,
+            uint64_t nr_timesteps,
+            uint64_t nr_subgrids,
+            uint64_t subgrid_size,
+            uint64_t nr_correlations)
+        {
+            // Flops per subgrid
+            uint64_t flops_per_subgrid = 0;
+            flops_per_subgrid += nr_terms * subgrid_size * subgrid_size * nr_correlations * 30; // aterm
+            flops_per_subgrid += nr_terms * 2; // gradient sum
+            flops_per_subgrid += nr_terms * nr_terms * 2; // hessian sum
+
+            // Flops per visibility
+            uint64_t flops_per_visibility = 0;
+            flops_per_visibility += nr_terms * subgrid_size * subgrid_size * nr_correlations * 8; // reduction
+            flops_per_visibility += nr_correlations * 8; // scale
+            flops_per_visibility += nr_correlations * 2; // residual visibility
+            flops_per_visibility += nr_correlations * nr_terms * 6; // gradient
+            flops_per_visibility += nr_correlations * nr_terms * nr_terms * 6; // hessian
+
+            // Total number of flops
+            uint64_t flops_total = 0;
+            flops_total += nr_subgrids * flops_per_subgrid;
+            flops_total += nr_timesteps * nr_channels * flops_per_visibility;
+            return flops_total;
+        }
+
+        uint64_t bytes_calibrate()
+        {
+            return 0;
         }
 
         uint64_t flops_fft(
@@ -203,7 +238,7 @@ namespace idg {
             unsigned int nr_baselines,
             unsigned int nr_timesteps)
         {
-            return 1ULL * nr_baselines * nr_timesteps * sizeof(UVWCoordinate<float>);
+            return 1ULL * nr_baselines * nr_timesteps * sizeof(UVW<float>);
         }
 
         uint64_t sizeof_subgrids(
@@ -242,6 +277,13 @@ namespace idg {
             return 1ULL * nr_stations * nr_timeslots * nr_correlations * subgrid_size * subgrid_size * sizeof(std::complex<float>);
         }
 
+        uint64_t sizeof_aterms_indices(
+            unsigned int nr_baselines,
+            unsigned int nr_timesteps)
+        {
+            return 1ULL * nr_baselines * nr_timesteps * sizeof(int);
+        }
+
         uint64_t sizeof_spheroidal(
             unsigned int subgrid_size)
         {
@@ -267,103 +309,13 @@ namespace idg {
             return 1ULL * (nr_timeslots + 1) * sizeof(unsigned int);
         }
 
-        /*
-            Performance reporting
-         */
-        #define FW1 12
-        #define FW2 8
-
-        void report(
-            string name,
-            double runtime)
+        uint64_t sizeof_weights(
+            unsigned int nr_baselines,
+            unsigned int nr_timesteps,
+            unsigned int nr_channels,
+            unsigned int nr_correlations)
         {
-            clog << setw(FW1) << left << string(name) + ": "
-                 << setw(FW2) << right << scientific << setprecision(4)
-                 << runtime << " s" << endl;
-        }
-
-        void report(
-            string name,
-            double runtime,
-            double joules,
-            uint64_t flops,
-            uint64_t bytes,
-            bool ignore_short)
-        {
-            // Ignore very short measurements
-            if (ignore_short && runtime < 1e-3) {
-                return;
-            }
-
-            double watt = joules / runtime;
-            #pragma omp critical (clog)
-            {
-                clog << setw(FW1) << left << string(name) + ": "
-                     << setw(FW2) << right << scientific << setprecision(4)
-                     << runtime << " s";
-                #if defined(REPORT_OPS)
-                if (flops != 0) {
-                    clog << ", ";
-                    double gops = (flops / runtime) * 1e-9;
-                        clog << setw(FW2) << right << fixed << setprecision(2)
-                                          << gops << " GOPS";
-                }
-                #else
-                if (flops != 0) {
-                    clog << ", ";
-                    double gflops = (flops / runtime) * 1e-9;
-                        clog << setw(FW2) << right << fixed << setprecision(2)
-                                          << gflops << " GFLOPS";
-                }
-                #endif
-                if (bytes != 0) {
-                    clog << ", ";
-                    clog << setw(FW2) << right << fixed << setprecision(2)
-                                      << bytes / runtime * 1e-9 << " GB/s";
-                }
-                if (watt > 1) {
-                    clog << ", ";
-                    clog << setw(FW2) << right << fixed << setprecision(2)
-                                      << watt << " Watt";
-                }
-                if (flops != 0 && watt > 1) {
-                    clog << ", ";
-                    clog << setw(FW2) << right << fixed << setprecision(2)
-                                      << (flops / runtime * 1e-9) / watt << " GFLOPS/W";
-                }
-                if (joules > 1) {
-                    clog << ", ";
-                    clog << setw(FW2) << right  << fixed << setprecision(2)
-                                      << joules << " Joules";
-                }
-
-            }
-            clog << endl;
-        }
-
-        void report(
-            string name,
-            uint64_t flops,
-            uint64_t bytes,
-            powersensor::PowerSensor *powerSensor,
-            powersensor::State startState,
-            powersensor::State endState)
-        {
-            double seconds = powerSensor->seconds(startState, endState);
-            double joules  = powerSensor->Joules(startState, endState);
-            report(name, seconds, flops, bytes, joules);
-            return;
-       }
-
-        void report_visibilities(
-            string name,
-            double runtime,
-            uint64_t nr_visibilities)
-        {
-            clog << setw(FW1) << left << string(name) + ": "
-                 << fixed << setprecision(2)
-                 << 1e-6 * nr_visibilities / runtime
-                 << " Mvisibilities/s" << endl;
+            return 1ULL * nr_baselines * nr_timesteps * nr_channels * nr_correlations * sizeof(float);
         }
 
         /*
@@ -400,5 +352,74 @@ namespace idg {
         std::string get_lib_dir() {
             return std::string(IDG_INSTALL_DIR) + "/lib";
         }
+
+        size_t get_total_memory() {
+            auto pages = sysconf(_SC_PHYS_PAGES);
+            auto page_size = sysconf(_SC_PAGE_SIZE);
+            return pages * page_size / (1024 * 1024); // in MBytes;
+        }
+
+        size_t get_used_memory() {
+            struct rusage r_usage;
+            getrusage(RUSAGE_SELF, &r_usage); // in KBytes
+            return r_usage.ru_maxrss / 1024; // in MBytes
+        }
+
+        size_t get_free_memory() {
+            return get_total_memory() - get_used_memory();
+        }
+
+        size_t get_nr_threads() {
+            size_t nr_threads = 0;
+            #pragma omp parallel
+            {
+                nr_threads = omp_get_num_threads();
+            }
+            return nr_threads;
+        }
+
+        void print_version() {
+            cout << "IDG version ";
+            if (!string(GIT_TAG).empty()) {
+                cout << " " << GIT_TAG << ":";
+            }
+            cout << GIT_BRANCH << ":" << GIT_REV << endl;
+        }
+
+        DefaultMemory::DefaultMemory(size_t bytes)
+        {
+            if (bytes > 0) {
+                m_bytes = bytes;
+                m_ptr = malloc(bytes);
+            }
+        }
+
+        DefaultMemory::~DefaultMemory()
+        {
+            if (m_bytes > 0) {
+                free(m_ptr);
+            }
+        }
+
+        AlignedMemory::AlignedMemory(size_t bytes)
+        {
+            void *ptr = nullptr;
+            if (bytes > 0) {
+                bytes = (((bytes - 1) / m_alignment) * m_alignment) + m_alignment;
+                if (posix_memalign(&ptr, m_alignment, bytes) != 0) {
+                    throw std::runtime_error("posix_memalign failed");
+                };
+            }
+            m_bytes = bytes;
+            m_ptr = ptr;
+        }
+
+        AlignedMemory::~AlignedMemory()
+        {
+            if (m_bytes > 0) {
+                free(m_ptr);
+            }
+        }
+
     } // namespace auxiliary
 } // namespace idg

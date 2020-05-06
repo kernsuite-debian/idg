@@ -7,6 +7,7 @@ include_directories(external)
 
 # add subfolders
 add_subdirectory(common)
+add_subdirectory(external)
 add_subdirectory(fft)
 if (BUILD_LIB_CPU)
     add_subdirectory(CPU)
@@ -25,6 +26,37 @@ if (BUILD_WITH_PYTHON)
 endif()
 
 
+#########################################################
+# enable rpath for all of the libidg-*.so files         #
+#########################################################
+set(CMAKE_INSTALL_RPATH ${CUDA_LIB_DIR})
+set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+
+
+#########################################################
+# build libidg-external, containing all external code   #
+#########################################################
+add_library(
+    idg-external
+    $<TARGET_OBJECTS:external>
+)
+
+set_target_properties(
+    idg-external PROPERTIES
+    PUBLIC_HEADER idg-external.h
+    SOVERSION 0
+)
+
+install(
+    TARGETS idg-external
+    EXPORT idg-targets
+    RUNTIME DESTINATION bin
+    LIBRARY DESTINATION lib
+    ARCHIVE DESTINATION lib/static
+    PUBLIC_HEADER DESTINATION include
+)
+
+
 
 #########################################################
 # build libidg-common, containing all common code       #
@@ -35,11 +67,23 @@ add_library(
     $<TARGET_OBJECTS:common>
 )
 
+set(
+    LINK_LIBRARIES
+    idg-external
+)
+
 if(HAVE_POWERSENSOR)
-    target_link_libraries(
-        idg-common
-        ${POWERSENSOR_LIBRARY})
+    set(
+        LINK_LIBRARIES
+        ${LINK_LIBRARIES}
+        ${POWERSENSOR_LIBRARY}
+    )
 endif()
+
+target_link_libraries(
+    idg-common
+    ${LINK_LIBRARIES}
+)
 
 set_target_properties(
     idg-common PROPERTIES

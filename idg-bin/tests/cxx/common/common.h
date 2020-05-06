@@ -11,7 +11,7 @@ using namespace std;
 
 
 // computes sqrt(A^2-B^2) / n
-float get_accucary(
+float get_accuracy(
     const int n,
     const std::complex<float>* A,
     const std::complex<float>* B)
@@ -92,7 +92,6 @@ void print_parameters(
 
 // run gridding and degridding for ProxyType and reference CPU
 // proxy and compare the outcome; usage run_test<proxy::cpu::Optimized>();
-template <typename ProxyType>
 int compare_to_reference(float tol = 1000*std::numeric_limits<float>::epsilon())
 {
     int info = 0;
@@ -100,19 +99,32 @@ int compare_to_reference(float tol = 1000*std::numeric_limits<float>::epsilon())
     // Parameters
     unsigned int nr_correlations = 4;
     float w_offset               = 0;
-    unsigned int nr_stations     = 12;
+    unsigned int nr_stations     = 9;
     unsigned int nr_channels     = 9;
     unsigned int nr_timesteps    = 2048;
     unsigned int nr_timeslots    = 7;
-    unsigned int grid_size       = 1024;
+    unsigned int grid_size       = 2048;
     unsigned int subgrid_size    = 32;
     unsigned int kernel_size     = 9;
     unsigned int nr_baselines    = (nr_stations * (nr_stations - 1)) / 2;
-    float grid_padding           = 0.8;
 
     // Initialize Data object
     idg::Data data;
-    float image_size             = data.compute_image_size(grid_padding * grid_size);
+
+    // Determine the max baseline length for given grid_size
+    auto max_uv = data.compute_max_uv(grid_size);
+    data.print_info();
+
+    // Select only baselines up to max_uv meters long
+    data.limit_max_baseline_length(max_uv);
+    data.print_info();
+
+    // Restrict the number of baselines to nr_baselines
+    data.limit_nr_baselines(nr_baselines);
+    data.print_info();
+
+    // Get remaining parameters
+    float image_size             = data.compute_image_size(grid_size);
     float cell_size              = image_size / grid_size;
 
     // Print parameters
@@ -128,29 +140,41 @@ int compare_to_reference(float tol = 1000*std::numeric_limits<float>::epsilon())
 
     // Allocate and initialize data structures
     clog << ">>> Initialize data structures" << endl;
-    idg::Array1D<float> frequencies =
-        idg::get_example_frequencies(optimized, nr_channels);
+    idg::Array1D<float> frequencies = optimized.allocate_array1d<float>(nr_channels);
+        data.get_frequencies(frequencies, image_size);
+    idg::Array2D<idg::UVW<float>> uvw = optimized.allocate_array2d<idg::UVW<float>>(nr_baselines, nr_timesteps);
+        data.get_uvw(uvw);
     idg::Array3D<idg::Visibility<std::complex<float>>> visibilities =
         idg::get_dummy_visibilities(optimized, nr_baselines, nr_timesteps, nr_channels);
     idg::Array3D<idg::Visibility<std::complex<float>>> visibilities_ref =
         idg::get_dummy_visibilities(reference, nr_baselines, nr_timesteps, nr_channels);
     idg::Array1D<std::pair<unsigned int,unsigned int>> baselines =
         idg::get_example_baselines(optimized, nr_stations, nr_baselines);
-    idg::Array2D<idg::UVWCoordinate<float>> uvw =
-        idg::get_example_uvw(nr_stations, nr_baselines, nr_timesteps);
     idg::Array4D<idg::Matrix2x2<std::complex<float>>> aterms =
-        idg::get_identity_aterms(optimized, nr_timeslots, nr_stations, subgrid_size, subgrid_size);
+        idg::get_example_aterms(optimized, nr_timeslots, nr_stations, subgrid_size, subgrid_size);
     idg::Array1D<unsigned int> aterms_offsets =
         idg::get_example_aterms_offsets(optimized, nr_timeslots, nr_timesteps);
     idg::Array2D<float> spheroidal =
-        idg::get_example_spheroidal(subgrid_size, subgrid_size);
+        idg::get_example_spheroidal(optimized, subgrid_size, subgrid_size);
     idg::Array1D<float> shift =
         idg::get_zero_shift();
-    idg::Grid grid =
-        optimized.get_grid(1, nr_correlations, grid_size, grid_size);
-    idg::Grid grid_ref =
-        reference.get_grid(1, nr_correlations, grid_size, grid_size);
+    auto grid =
+        optimized.allocate_grid(1, nr_correlations, grid_size, grid_size);
+    auto grid_ref =
+        reference.allocate_grid(1, nr_correlations, grid_size, grid_size);
     clog << endl;
+
+    // Flag the first visibilities by setting UVW coordinate to infinity
+    idg::UVW<float> infinity = { std::numeric_limits<float>::infinity(), 0, 0};
+    for (unsigned int bl = 0; bl < nr_baselines; bl++) {
+        for (unsigned int time = 0; time < nr_timesteps / 10; time++) {
+            uvw(bl, time) = infinity;
+        }
+    }
+
+    // Bind the grids to the respective proxies
+    optimized.set_grid(grid);
+    reference.set_grid(grid_ref);
 
     // Set w-terms to zero
     for (unsigned bl = 0; bl < nr_baselines; bl++) {
@@ -173,33 +197,38 @@ int compare_to_reference(float tol = 1000*std::numeric_limits<float>::epsilon())
     optimized.gridding(
          plan, w_offset, shift, cell_size, kernel_size, subgrid_size,
          frequencies, visibilities, uvw, baselines,
-         grid, aterms, aterms_offsets, spheroidal);
+         *grid, aterms, aterms_offsets, spheroidal);
+    optimized.get_grid();
 
     std::clog << ">>> Run reference gridding" << std::endl;
     reference.gridding(
          plan, w_offset, shift, cell_size, kernel_size, subgrid_size,
          frequencies, visibilities, uvw, baselines,
-         grid_ref, aterms, aterms_offsets, spheroidal);
+         *grid_ref, aterms, aterms_offsets, spheroidal);
+    reference.get_grid();
 
-    float grid_error = get_accucary(
+    float grid_error = get_accuracy(
         nr_correlations*grid_size*grid_size,
-        grid.data(),
-        grid_ref.data());
+        grid->data(),
+        grid_ref->data());
+
+    // Use the same grid for both degridding calls
+    reference.set_grid(optimized.get_grid());
 
     // Run degridder
     std::clog << ">>> Run degridding" << std::endl;
-    memset(visibilities.data(), 0, visibilities.bytes());
-    memset(visibilities_ref.data(), 0, visibilities_ref.bytes());
+    visibilities.zero();
+    visibilities_ref.zero();
     optimized.degridding(
         plan, w_offset, shift, cell_size, kernel_size, subgrid_size,
         frequencies, visibilities, uvw, baselines,
-        grid, aterms, aterms_offsets, spheroidal);
+        *grid, aterms, aterms_offsets, spheroidal);
 
     std::clog << ">>> Run reference degridding" << std::endl;
     reference.degridding(
         plan, w_offset, shift, cell_size, kernel_size, subgrid_size,
         frequencies, visibilities_ref, uvw, baselines,
-        grid, aterms, aterms_offsets, spheroidal);
+        *grid, aterms, aterms_offsets, spheroidal);
 
     std::clog << std::endl;
 
@@ -207,7 +236,7 @@ int compare_to_reference(float tol = 1000*std::numeric_limits<float>::epsilon())
     plan.mask_visibilities(visibilities);
     plan.mask_visibilities(visibilities_ref);
 
-    float degrid_error = get_accucary(
+    float degrid_error = get_accuracy(
         nr_baselines*nr_timesteps*nr_channels*nr_correlations,
         (std::complex<float> *) visibilities.data(),
         (std::complex<float> *) visibilities_ref.data());

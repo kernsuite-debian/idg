@@ -16,14 +16,13 @@ extern "C" {
         const unsigned int baselines_nr_baselines,
         const unsigned int baselines_two,
         unsigned int* aterms_offsets,
-        const unsigned int aterms_offsets_nr_timeslots_plus_one,
-        const int max_nr_timesteps_per_subgrid = std::numeric_limits<int>::max())
+        const unsigned int aterms_offsets_nr_timeslots_plus_one)
     {
 
         idg::Array1D<float> frequencies_(
             frequencies, frequencies_nr_channels);
-        idg::Array2D<idg::UVWCoordinate<float>> uvw_(
-            (idg::UVWCoordinate<float> *) uvw, uvw_nr_baselines, uvw_nr_timesteps);
+        idg::Array2D<idg::UVW<float>> uvw_(
+            (idg::UVW<float> *) uvw, uvw_nr_baselines, uvw_nr_timesteps);
         idg::Array1D<std::pair<unsigned int,unsigned int>> baselines_(
             (std::pair<unsigned int,unsigned int> *) baselines, baselines_nr_baselines);
         idg::Array1D<unsigned int> aterms_offsets_(

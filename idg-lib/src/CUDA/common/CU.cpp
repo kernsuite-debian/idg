@@ -144,23 +144,10 @@ namespace cu {
         HostMemory
     */
     HostMemory::HostMemory(size_t size, int flags) {
-        _capacity = size;
-        _size = size;
+        m_capacity = size;
+        m_bytes = size;
         _flags = flags;
-        assertCudaCall(cuMemHostAlloc(&_ptr, size, _flags));
-        allocated = true;
-    }
-
-    HostMemory::HostMemory(void *ptr, size_t size, int flags, bool register_memory) {
-        _capacity = size;
-        _size = size;
-        _flags = flags;
-        assert(ptr != NULL);
-        _ptr = ptr;
-        if (register_memory) {
-            checkCudaCall(cuMemHostRegister(ptr, size, _flags));
-        }
-        registered = register_memory;
+        assertCudaCall(cuMemHostAlloc(&m_ptr, size, _flags));
     }
 
     HostMemory::~HostMemory() {
@@ -169,44 +156,49 @@ namespace cu {
 
     void HostMemory::resize(size_t size) {
         assert(size > 0);
-        if (size < _capacity) {
-            _size = size;
-        } else if (size > _capacity) {
+        if (size < m_capacity) {
+            m_bytes = size;
+        } else if (size > m_capacity) {
             release();
-            if (allocated) {
-                assertCudaCall(cuMemHostAlloc(&_ptr, size, _flags));
-            }
-            if (registered) {
-                checkCudaCall(cuMemHostRegister(_ptr, size, _flags));
-            }
-            _size = size;
-            _capacity = size;
+            assertCudaCall(cuMemHostAlloc(&m_ptr, size, _flags));
+            m_bytes = size;
+            m_capacity = size;
         }
     }
 
     void HostMemory::release() {
-        if (allocated) {
-            assertCudaCall(cuMemFreeHost(_ptr));
-        }
-        if (registered) {
-            checkCudaCall(cuMemHostUnregister(_ptr));
-        }
-    }
-
-    size_t HostMemory::capacity() {
-        return _capacity;
-    }
-
-    size_t HostMemory::size() {
-        return _size;
+        assertCudaCall(cuMemFreeHost(m_ptr));
     }
 
     void HostMemory::zero() {
-        memset(_ptr, 0, _size);
+        memset(m_ptr, 0, m_bytes);
     }
 
-    void* HostMemory::get(size_t offset) {
-        return (void *) ((size_t) _ptr + offset);
+    /*
+        RegisteredMemory
+    */
+    RegisteredMemory::RegisteredMemory(void *ptr, size_t size, int flags) {
+        m_bytes = size;
+        _flags = flags;
+        assert(ptr != NULL);
+        m_ptr = ptr;
+        checkCudaCall(cuMemHostRegister(ptr, size, _flags));
+    }
+
+    RegisteredMemory::~RegisteredMemory() {
+        release();
+    }
+
+    void RegisteredMemory::resize(size_t size) {
+        throw std::runtime_error("RegisteredMemory can not be resized!");
+    }
+
+    void RegisteredMemory::release() {
+        checkCudaCall(cuMemHostUnregister(m_ptr));
+    }
+
+    void RegisteredMemory::zero() {
+        memset(m_ptr, 0, m_bytes);
     }
 
 
@@ -300,7 +292,8 @@ namespace cu {
 
     void Source::compile(const char *output_file_name, const char *compiler_options) {
         std::stringstream command_line;
-        command_line << "nvcc -cubin ";
+        command_line << NVCC;
+        command_line << " -cubin ";
         command_line << compiler_options;
         command_line << " -o ";
         command_line << output_file_name;
@@ -402,20 +395,16 @@ namespace cu {
         assertCudaCall(cuStreamDestroy(_stream));
     }
 
-    void Stream::memcpyHtoDAsync(DeviceMemory &devPtr, const void *hostPtr) {
-        assertCudaCall(cuMemcpyHtoDAsync(devPtr, hostPtr, devPtr.size(), _stream));
-    }
-
     void Stream::memcpyHtoDAsync(CUdeviceptr devPtr, const void *hostPtr, size_t size) {
         assertCudaCall(cuMemcpyHtoDAsync(devPtr, hostPtr, size, _stream));
     }
 
-    void Stream::memcpyDtoHAsync(void *hostPtr, DeviceMemory &devPtr) {
-        assertCudaCall(cuMemcpyDtoHAsync(hostPtr, devPtr, devPtr.size(), _stream));
-    }
-
     void Stream::memcpyDtoHAsync(void *hostPtr, CUdeviceptr devPtr, size_t size) {
         assertCudaCall(cuMemcpyDtoHAsync(hostPtr, devPtr, size, _stream));
+    }
+
+    void Stream::memcpyDtoDAsync(CUdeviceptr dstPtr, CUdeviceptr srcPtr, size_t size) {
+        assertCudaCall(cuMemcpyDtoDAsync(dstPtr, srcPtr, size, _stream));
     }
 
     void Stream::launchKernel(Function &function, unsigned gridX, unsigned gridY, unsigned gridZ, unsigned blockX, unsigned blockY, unsigned blockZ, unsigned sharedMemBytes, const void **parameters) {
@@ -463,6 +452,12 @@ namespace cu {
         _attributes.message.ascii = message;
     }
 
+    Marker::Marker(
+        const char *message,
+        Color color):
+        Marker(message, convert(color))
+    {}
+
     void Marker::start()
     {
         _id = nvtxRangeStartEx(&_attributes);
@@ -473,5 +468,16 @@ namespace cu {
         nvtxRangeEnd(_id);
     }
 
+    unsigned int Marker::convert(Color color)
+    {
+        switch (color) {
+            case red :    return 0xffff0000;
+            case green :  return 0xff00ff00;
+            case blue :   return 0xff0000ff;
+            case yellow : return 0xffffff00;
+            case black :  return 0xff000000;
+            default:      return 0xff00ff00;
+        }
+    }
 
 } // end namespace cu

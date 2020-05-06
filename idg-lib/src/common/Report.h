@@ -3,11 +3,65 @@
 
 #include <vector>
 #include <sstream>
+#include <iostream>
+#include <iomanip>
+#include <cassert>
 
 #include "auxiliary.h"
+
 #include "PowerSensor.h"
 
 namespace idg {
+
+    namespace auxiliary {
+        /*
+            Strings
+        */
+        const std::string name_gridding("gridding");
+        const std::string name_degridding("degridding");
+        const std::string name_adding("|adding");
+        const std::string name_splitting("|splitting");
+        const std::string name_adder("adder");
+        const std::string name_splitter("splitter");
+        const std::string name_gridder("gridder");
+        const std::string name_degridder("degridder");
+        const std::string name_calibrate("calibrate");
+        const std::string name_subgrid_fft("sub-fft");
+        const std::string name_grid_fft("grid-fft");
+        const std::string name_fft_shift("fft-shift");
+        const std::string name_fft_scale("fft-scale");
+        const std::string name_scaler("scaler");
+        const std::string name_host("host");
+        const std::string name_device("device");
+    }
+
+    /*
+        Performance reporting
+     */
+    void report(
+        const std::string name,
+        double runtime);
+
+    void report(
+        const std::string name,
+        double runtime,
+        double joules,
+        uint64_t flops,
+        uint64_t bytes,
+        bool ignore_short = false);
+
+    void report(
+        const std::string name,
+        uint64_t flops,
+        uint64_t bytes,
+        powersensor::PowerSensor *powerSensor,
+        powersensor::State startState,
+        powersensor::State endState);
+
+    void report_visibilities(
+        const std::string name,
+        double runtime,
+        uint64_t nr_visibilities);
 
     class Report
     {
@@ -21,9 +75,10 @@ namespace idg {
 
         struct Parameters
         {
-            int nr_channels;
-            int subgrid_size;
-            int grid_size;
+            int nr_channels  = 0;
+            int subgrid_size = 0;
+            int grid_size    = 0;
+            int nr_terms     = 0;
         };
 
         struct Counters
@@ -37,22 +92,26 @@ namespace idg {
             Report(
                 const int nr_channels  = 0,
                 const int subgrid_size = 0,
-                const int grid_size    = 0)
+                const int grid_size    = 0,
+                const int nr_terms     = 0)
             {
                 parameters.nr_channels  = nr_channels;
                 parameters.subgrid_size = subgrid_size;
                 parameters.grid_size    = grid_size;
+                parameters.nr_terms     = nr_terms;
                 reset();
             }
 
             void initialize(
                 const int nr_channels  = 0,
                 const int subgrid_size = 0,
-                const int grid_size    = 0)
+                const int grid_size    = 0,
+                const int nr_terms     = 0)
             {
                 parameters.nr_channels  = nr_channels;
                 parameters.subgrid_size = subgrid_size;
                 parameters.grid_size    = grid_size;
+                parameters.nr_terms     = nr_terms;
                 reset();
             }
 
@@ -67,13 +126,7 @@ namespace idg {
             void update(
                 Report::State& reportState,
                 powersensor::State& startState,
-                powersensor::State& endState)
-            {
-                reportState.current_seconds = powersensor::PowerSensor::seconds(startState, endState);
-                reportState.current_joules  = powersensor::PowerSensor::Joules(startState, endState);
-                reportState.total_seconds  += reportState.current_seconds;
-                reportState.total_joules   += reportState.current_joules;
-            }
+                powersensor::State& endState);
 
             void update_host(
                 powersensor::State& startState,
@@ -118,6 +171,15 @@ namespace idg {
                 degridder_pre_enabled = true;
                 degridder_pre_updated = true;
                 update(state_degridder_pre, startState, endState);
+            }
+
+            void update_calibrate(
+                powersensor::State& startState,
+                powersensor::State& endState)
+            {
+                calibrate_enabled = true;
+                calibrate_updated = true;
+                update(state_calibrate, startState, endState);
             }
 
             void update_adder(
@@ -231,13 +293,7 @@ namespace idg {
 
             void update_devices(
                 std::vector<powersensor::State> start,
-                std::vector<powersensor::State> end)
-            {
-                assert(start.size() == end.size());
-                for (unsigned d = 0; d < start.size(); d++) {
-                    update_device(start[d], end[d], d);
-                }
-            }
+                std::vector<powersensor::State> end);
 
             void update_total(
                 int nr_subgrids,
@@ -258,6 +314,7 @@ namespace idg {
                 auto nr_channels  = parameters.nr_channels;
                 auto subgrid_size = parameters.subgrid_size;
                 auto grid_size    = parameters.grid_size;
+                auto nr_terms     = parameters.nr_terms;
 
                 // Do not report short measurements, unless reporting total runtime
                 bool ignore_short = !total;
@@ -269,7 +326,7 @@ namespace idg {
                         seconds += total ? state_gridder_post.total_seconds : state_gridder_post.current_seconds;
                         joules  += total ? state_gridder_post.total_joules : state_gridder_post.current_joules;
                     }
-                    auxiliary::report(
+                    report(
                         prefix + auxiliary::name_gridder,
                         seconds,
                         joules,
@@ -285,7 +342,7 @@ namespace idg {
                         seconds += total ? state_degridder_pre.total_seconds : state_degridder_pre.current_seconds;
                         joules  += total ? state_degridder_pre.total_joules : state_degridder_pre.current_joules;
                     }
-                    auxiliary::report(
+                    report(
                         prefix + auxiliary::name_degridder,
                         seconds,
                         joules,
@@ -295,7 +352,7 @@ namespace idg {
                     degridder_updated = false;
                 }
                 if ((total && subgrid_fft_enabled) || subgrid_fft_updated) {
-                    auxiliary::report(
+                    report(
                         prefix + auxiliary::name_subgrid_fft,
                         total ? state_subgrid_fft.total_seconds : state_subgrid_fft.current_seconds,
                         total ? state_subgrid_fft.total_joules : state_subgrid_fft.current_joules,
@@ -304,8 +361,18 @@ namespace idg {
                         ignore_short);
                     subgrid_fft_updated = false;
                 }
+                if ((total && calibrate_enabled) || calibrate_updated) {
+                    report(
+                        prefix + auxiliary::name_calibrate,
+                        total ? state_calibrate.total_seconds : state_calibrate.current_seconds,
+                        total ? state_calibrate.total_joules : state_calibrate.current_joules,
+                        auxiliary::flops_calibrate(nr_terms, nr_channels, nr_timesteps, nr_subgrids, subgrid_size),
+                        auxiliary::bytes_calibrate(),
+                        ignore_short);
+                    calibrate_updated = false;
+                }
                 if ((total && adder_enabled) || adder_updated) {
-                    auxiliary::report(
+                    report(
                         prefix + auxiliary::name_adder,
                         total ? state_adder.total_seconds : state_adder.current_seconds,
                         total ? state_adder.total_joules : state_adder.current_joules,
@@ -315,7 +382,7 @@ namespace idg {
                     adder_updated = false;
                 }
                 if ((total && splitter_enabled) || splitter_updated) {
-                    auxiliary::report(
+                    report(
                         prefix + auxiliary::name_splitter,
                         total ? state_splitter.total_seconds : state_splitter.current_seconds,
                         total ? state_splitter.total_joules : state_splitter.current_joules,
@@ -325,7 +392,7 @@ namespace idg {
                     splitter_updated = false;
                 }
                 if ((total && scaler_enabled) || scaler_updated) {
-                    auxiliary::report(
+                    report(
                         prefix + auxiliary::name_scaler,
                         total ? state_scaler.total_seconds : state_scaler.current_seconds,
                         total ? state_scaler.total_joules : state_scaler.current_joules,
@@ -335,7 +402,7 @@ namespace idg {
                     scaler_updated = false;
                 }
                 if ((total && grid_fft_updated) || grid_fft_updated) {
-                    auxiliary::report(
+                    report(
                         prefix + auxiliary::name_grid_fft,
                         total ? state_grid_fft.total_seconds : state_grid_fft.current_seconds,
                         total ? state_grid_fft.total_joules : state_grid_fft.current_joules,
@@ -345,21 +412,21 @@ namespace idg {
                     grid_fft_updated = false;
                 }
                 if ((total && fft_shift_enabled) || fft_shift_updated) {
-                    auxiliary::report(
+                    report(
                         prefix + auxiliary::name_fft_shift,
                         total ? state_fft_shift.total_seconds : state_fft_shift.current_seconds,
                         0, 0, 0, ignore_short);
                     fft_shift_updated = false;
                 }
                 if ((total && fft_scale_enabled) || fft_scale_updated) {
-                    auxiliary::report(
+                    report(
                         prefix + auxiliary::name_fft_scale,
                         total ? state_fft_scale.total_seconds : state_fft_scale.current_seconds,
                         0, 0, 0, ignore_short);
                     fft_scale_updated = false;
                 }
                 if ((total && host_enabled) || host_updated) {
-                    auxiliary::report(
+                    report(
                         prefix + auxiliary::name_host,
                         total ? state_host.total_seconds : state_host.current_seconds,
                         total ? state_host.total_joules : state_host.current_joules,
@@ -388,7 +455,7 @@ namespace idg {
                 if (nr_visibilities == 0) {
                     nr_visibilities = counters.total_nr_visibilities;
                 }
-                auxiliary::report_visibilities(
+                report_visibilities(
                     prefix + name,
                     state_host.total_seconds,
                     nr_visibilities);
@@ -397,27 +464,11 @@ namespace idg {
             void print_device(
                 powersensor::State& startState,
                 powersensor::State& endState,
-                int i = -1)
-            {
-                    std::stringstream name;
-                    name << prefix << auxiliary::name_device;
-                    if (i > 0) {
-                       name <<  i;
-                    }
-                    double seconds = powersensor::PowerSensor::seconds(startState, endState);
-                    double joules  = powersensor::PowerSensor::Joules(startState, endState);
-                    auxiliary::report(name.str().c_str(), seconds, joules, 0, 0);
-            }
+                int i = -1);
 
             void print_devices(
                 std::vector<powersensor::State> start,
-                std::vector<powersensor::State> end)
-            {
-                assert(start.size() == end.size());
-                for (unsigned i = 0; i < start.size(); i++) {
-                    print_device(start[i], end[i], i);
-                }
-            }
+                std::vector<powersensor::State> end);
 
             void print_devices()
             {
@@ -428,7 +479,7 @@ namespace idg {
                     if (states_device.size() > 1) {
                        name <<  i;
                     }
-                    auxiliary::report(name.str().c_str(), state.total_seconds, state.total_joules, 0, 0);
+                    report(name.str().c_str(), state.total_seconds, state.total_joules, 0, 0);
                 }
             }
 
@@ -439,6 +490,7 @@ namespace idg {
                 degridder_pre_enabled = false;
                 degridder_enabled   = false;
                 adder_enabled       = false;
+                calibrate_enabled   = false;
                 splitter_enabled    = false;
                 scaler_enabled      = false;
                 subgrid_fft_enabled = false;
@@ -450,8 +502,11 @@ namespace idg {
 
                 host_updated        = false;
                 gridder_updated     = false;
+                gridder_post_updated  = false;
+                degridder_pre_updated = false;
                 degridder_updated   = false;
                 adder_updated       = false;
+                calibrate_updated   = false;
                 splitter_updated    = false;
                 scaler_updated      = false;
                 subgrid_fft_updated = false;
@@ -464,6 +519,7 @@ namespace idg {
                 state_host        = state_zero;
                 state_gridder     = state_zero;
                 state_degridder   = state_zero;
+                state_calibrate   = state_zero;
                 state_adder       = state_zero;
                 state_splitter    = state_zero;
                 state_scaler      = state_zero;
@@ -488,6 +544,7 @@ namespace idg {
             bool gridder_post_enabled;
             bool degridder_enabled;
             bool degridder_pre_enabled;
+            bool calibrate_enabled;
             bool adder_enabled;
             bool splitter_enabled;
             bool scaler_enabled;
@@ -503,6 +560,7 @@ namespace idg {
             bool gridder_post_updated;
             bool degridder_pre_updated;
             bool degridder_updated;
+            bool calibrate_updated;
             bool adder_updated;
             bool splitter_updated;
             bool scaler_updated;
@@ -521,6 +579,7 @@ namespace idg {
             State state_gridder_post;
             State state_degridder;
             State state_degridder_pre;
+            State state_calibrate;
             State state_adder;
             State state_splitter;
             State state_scaler;

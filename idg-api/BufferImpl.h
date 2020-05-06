@@ -64,7 +64,7 @@ namespace api {
 
         void set_w_step(float w_step);
         float get_w_step() const;
-        
+
         void set_shift(const float* shift);
         const idg::Array1D<float>& get_shift() const;
 
@@ -81,7 +81,7 @@ namespace api {
             const float* spheroidal);
 
         void set_grid(
-            Grid* grid);
+            std::shared_ptr<Grid> grid);
 
         void set_max_baseline(float max_baseline) {m_max_baseline = max_baseline;}
 
@@ -144,7 +144,6 @@ namespace api {
         size_t m_timeStartThisBatch;
         size_t m_timeStartNextBatch;
         std::set<size_t> m_timeindices;
-        std::vector<std::pair<int, int>> m_channel_groups;
 
         //
         float m_max_baseline;
@@ -170,22 +169,19 @@ namespace api {
 
         // Buffers
         Array1D<float> m_frequencies;                               // CH
-        std::vector<Array1D<float>> m_grouped_frequencies;          // CH
         Array2D<float> m_spheroidal;                                     // SB x SB
         std::vector<Matrix2x2<std::complex<float>>> m_aterms;
         std::vector<Matrix2x2<std::complex<float>>> m_default_aterms;
         Array4D<Matrix2x2<std::complex<float>>> m_aterms_array;     // ST x SB x SB
 
-        Array2D<UVWCoordinate<float>> m_bufferUVW;                       // BL x TI
+        Array2D<UVW<float>> m_bufferUVW;                       // BL x TI
         Array1D<std::pair<unsigned int,unsigned int>> m_bufferStationPairs;                         // BL
-        std::vector<Array3D<Visibility<std::complex<float>>>> m_bufferVisibilities;   // BL x TI x CH
-        Array3D<Visibility<std::complex<float>>> m_visibilities;   // BL * TI * CH
+        Array3D<Visibility<std::complex<float>>> m_bufferVisibilities;   // BL x TI x CH
 
-        Grid* m_grid; // pointer grid
+        std::shared_ptr<Grid> m_grid; // pointer grid
 
         // references to members of parent BufferSet
         size_t &m_subgridsize;
-
     };
 
 } // namespace api

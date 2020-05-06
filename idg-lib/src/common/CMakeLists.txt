@@ -7,6 +7,9 @@ set (${PROJECT_NAME}_headers
     RuntimeWrapper.h
     auxiliary.h
     Types.h
+    KernelTypes.h
+    ArrayTypes.h
+    Index.h
     KernelsInstance.h
     Proxy.h
 	Plan.h
@@ -14,6 +17,7 @@ set (${PROJECT_NAME}_headers
     PowerSensor.h
     Report.h
     Math.h
+    WTiles.h
 )
 
 set (${PROJECT_NAME}_sources
@@ -23,8 +27,10 @@ set (${PROJECT_NAME}_sources
     Types.cpp
     KernelsInstance.cpp
     Proxy.cpp
+    ProxyC.cpp
 	Plan.cpp
     PowerSensor.cpp
+    Report.cpp
 )
 
 add_library(

@@ -1,20 +1,22 @@
 #ifndef IDG_CUDA_UNIFIED_H_
 #define IDG_CUDA_UNIFIED_H_
 
-#include "idg-cuda.h"
-
-namespace cu {
-    class UnifiedMemory;
-}
+#include "CUDA/Generic/Generic.h"
 
 namespace powersensor {
     class PowerSensor;
 }
 
+namespace cu {
+    class UnifiedMemory;
+}
+
 namespace idg {
     namespace proxy {
         namespace cuda {
-            class Unified : public CUDA {
+
+            class Unified : public Generic {
+
                 public:
                     // Constructor
                     Unified(
@@ -22,31 +24,6 @@ namespace idg {
 
                     // Destructor
                     ~Unified();
-
-                    // Methods for memory management
-                    Grid get_grid(
-                        size_t nr_w_layers,
-                        size_t nr_correlations,
-                        size_t height,
-                        size_t width);
-
-                    void free_grid(
-                        Grid& grid);
-
-                private:
-                    void initialize_memory(
-                        const Plan& plan,
-                        const std::vector<int> jobsize,
-                        const int nr_streams,
-                        const int nr_baselines,
-                        const int nr_timesteps,
-                        const int nr_channels,
-                        const int nr_stations,
-                        const int nr_timeslots,
-                        const int subgrid_size,
-                        const int grid_size,
-                        void *visibilities,
-                        void *uvw);
 
                     virtual void do_gridding(
                         const Plan& plan,
@@ -57,7 +34,7 @@ namespace idg {
                         const unsigned int subgrid_size,
                         const Array1D<float>& frequencies,
                         const Array3D<Visibility<std::complex<float>>>& visibilities,
-                        const Array2D<UVWCoordinate<float>>& uvw,
+                        const Array2D<UVW<float>>& uvw,
                         const Array1D<std::pair<unsigned int,unsigned int>>& baselines,
                         Grid& grid,
                         const Array4D<Matrix2x2<std::complex<float>>>& aterms,
@@ -73,7 +50,7 @@ namespace idg {
                         const unsigned int subgrid_size,
                         const Array1D<float>& frequencies,
                         Array3D<Visibility<std::complex<float>>>& visibilities,
-                        const Array2D<UVWCoordinate<float>>& uvw,
+                        const Array2D<UVW<float>>& uvw,
                         const Array1D<std::pair<unsigned int,unsigned int>>& baselines,
                         const Grid& grid,
                         const Array4D<Matrix2x2<std::complex<float>>>& aterms,
@@ -84,16 +61,23 @@ namespace idg {
                         DomainAtoDomainB direction,
                         Array3D<std::complex<float>>& grid) override;
 
-                    powersensor::PowerSensor *hostPowerSensor;
+                    virtual void set_grid(std::shared_ptr<Grid> grid) override;
+
+                    virtual std::shared_ptr<Grid> get_grid() override;
 
                 private:
-                    void* allocate_memory(size_t bytes);
-                    void free_memory(void *ptr);
-                    void free_memory();
-                    std::vector<cu::UnifiedMemory*> memory;
+                    // The m_grid member defined in Proxy
+                    // may not reside in Unified Memory.
+                    // This m_grid_tiled is initialized as a copy
+                    // of m_grid and (optionally) tiled to match the
+                    // data access pattern in the unified_adder
+                    // and unified_splitter kernels.
+                    std::unique_ptr<Grid> m_grid_tiled = nullptr;
+
             }; // class Unified
 
         } // namespace cuda
     } // namespace proxy
 } // namespace idg
+
 #endif

@@ -5,6 +5,7 @@
 #include <memory>
 
 #include "idg-common.h"
+#include "idg-external.h"
 
 
 #include "BufferSet.h"
@@ -21,7 +22,7 @@ namespace api {
 
         BufferSetImpl(Type architecture);
 
-        virtual ~BufferSetImpl() {};
+        ~BufferSetImpl();
 
         DegridderBuffer* get_degridder(int i) final override;
         GridderBuffer* get_gridder(int i) final override;
@@ -56,6 +57,8 @@ namespace api {
         virtual void set_matrix_inverse_beam(std::shared_ptr<std::vector<std::complex<float>>> matrix_inverse_beam) final override;
         virtual void unset_matrix_inverse_beam() final override;
 
+        void report_runtime();
+
     private:
 
         proxy::Proxy* create_proxy();
@@ -73,7 +76,7 @@ namespace api {
         std::shared_ptr<std::vector<std::complex<float>>> m_matrix_inverse_beam;
         Array4D<std::complex<float>> m_default_aterm_correction;
         Array4D<std::complex<float>> m_avg_aterm_correction;
-        Grid m_grid;
+        std::shared_ptr<Grid> m_grid;
         size_t m_subgridsize;
         float m_image_size;
         float m_cell_size;
@@ -88,10 +91,20 @@ namespace api {
         bool m_do_gridding = true;
         bool m_do_compute_avg_beam = false;
 
+        // timing
+        std::unique_ptr<Stopwatch> m_get_image_watch;
+        std::unique_ptr<Stopwatch> m_set_image_watch;
+        std::unique_ptr<Stopwatch> m_avg_beam_watch;
+        std::unique_ptr<Stopwatch> m_plan_watch;
+        std::unique_ptr<Stopwatch> m_gridding_watch;
+        std::unique_ptr<Stopwatch> m_degridding_watch;
+
         friend BufferImpl;
         friend GridderBufferImpl;
         friend DegridderBufferImpl;
 
+        // debug
+        static void write_grid(idg::Grid& grid);
     };
 
 } // namespace api

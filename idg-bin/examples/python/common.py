@@ -1,8 +1,10 @@
+#!/usr/bin/env python
+
 # after INSTALLING the library, and sourcing init-enviroment.sh
 # (or setting the PYTHONPATH manually), you can import the idg module
 import idg
-import util
-from data import Data
+import idg.util as util
+from idg.data import Data
 import numpy
 import matplotlib.pyplot as plt
 import random
@@ -11,13 +13,16 @@ import random
 # paramaters
 ############
 _nr_channels      = 1
-_nr_timesteps     = 1*60*60           # samples per baseline
+_nr_timesteps     = 2*60*60        # samples per baseline
 _nr_timeslots     = 16             # A-term time slots
 _subgrid_size     = 24
+_grid_size        = 2048
 _integration_time = 0.9
-_kernel_size      = (_subgrid_size / 2) + 1
+_kernel_size      = int((_subgrid_size / 2) + 1)
 _nr_correlations  = 4
-_layout_file           = "SKA1_low_ecef"
+_layout_file      = "LOFAR_lba.txt"
+_nr_stations      = 20
+_nr_baselines     = int((_nr_stations * (_nr_stations - 1)) / 2)
 
 def get_nr_channels():
     return _nr_channels
@@ -31,6 +36,9 @@ def get_nr_timeslots():
 def get_subgrid_size():
     return _subgrid_size
 
+def get_grid_size():
+    return _grid_size
+
 def get_integration_time():
     return _integration_time
 
@@ -43,15 +51,11 @@ def get_nr_correlations():
 def get_layout_file():
     return _layout_file
 
-#################
-# initialize data
-#################
-def init_dummy_visibilities(nr_baselines, nr_timesteps, nr_channels):
-    visibilities =  numpy.ones(
-        (nr_baselines, nr_timesteps, nr_channels, _nr_correlations),
-        dtype = idg.visibilitiestype)
-    #util.plot_visibilities(visibilities)
-    return visibilities
+def get_nr_stations():
+    return _nr_stations
+
+def get_nr_baselines():
+    return _nr_baselines
 
 
 ###########
@@ -59,11 +63,10 @@ def init_dummy_visibilities(nr_baselines, nr_timesteps, nr_channels):
 ###########
 def plot_metadata(
         kernel_size, subgrid_size, grid_size, cell_size, image_size,
-        frequencies, uvw, baselines, aterms_offsets,
-        max_nr_timesteps = numpy.iinfo(numpy.int32).max):
+        frequencies, uvw, baselines, aterms_offsets):
     plan = idg.Plan(
         kernel_size, subgrid_size, grid_size, cell_size,
-        frequencies, uvw, baselines, aterms_offsets, max_nr_timesteps)
+        frequencies, uvw, baselines, aterms_offsets)
     nr_subgrids = plan.get_nr_subgrids()
     metadata = numpy.zeros(nr_subgrids, dtype = idg.metadatatype)
     plan.copy_metadata(metadata)
@@ -110,57 +113,45 @@ def main(proxyname):
     nr_timesteps     = get_nr_timesteps()
     nr_timeslots     = get_nr_timeslots()
     subgrid_size     = get_subgrid_size()
+    grid_size        = get_grid_size()
     integration_time = get_integration_time()
     kernel_size      = get_kernel_size()
     nr_correlations  = get_nr_correlations()
     w_step           = 0.0
     layout_file      = get_layout_file()
+    nr_stations      = get_nr_stations()
+    nr_baselines     = get_nr_baselines()
 
     ######################################################################
     # initialize data generator
     ######################################################################
-    #image_size      = round(data.compute_image_size(int(grid_size*1.2)), 3)
 
-    # Consider all stations and do not restrict baseline length
-    nr_stations_limit     = 0
-    baseline_length_limit = 0
+    # Initialize full dataset
+    data = Data(layout_file)
+    print(">> Dataset full: ")
+    data.print_info()
 
-    # Example 1: use custom grid_size and image_size
-    # baseline will be selected to fit within the imposed grid
-    # reduce image_size to artificially shrink uv-coverage
-    #data                  = Data(nr_stations_limit, baseline_length_limit, layout_file)
-    #grid_size             = 1024
-    #image_size            = 0.05
-    #data.filter_baselines(int(grid_size), image_size)
+    # Determine the maximum suggested grid_size using this dataset
+    grid_size_max = data.compute_grid_size()
+    print("maximum grid size: %d" % (grid_size_max))
 
-    # Example 2: specify grid_size
-    # this is more realistic, the uv-coverage grows with grid_size
-    data                  = Data(nr_stations_limit, baseline_length_limit, layout_file)
-    grid_size             = 2048
-    padding               = 0.9
-    image_size            = round(data.compute_image_size(int(grid_size * padding)), 3)
+    # Determine the max baseline length for given grid_size
+    max_uv = data.compute_max_uv(grid_size) # m
+    print("longest baseline required: %.2f km" % (max_uv * 1e-3))
 
-    # Example 3: specify image_size
-    # the grid_size is computed to match the resolution imposed by image_size and baseline length
-    #data                  = Data(nr_stations_limit, baseline_length_limit, layout_file)
-    #image_size            = 0.05
-    #padding               = 1.3
-    #grid_size             = int(data.compute_grid_size(image_size) * padding)
+    # Select only baselines up to max_uv meters long
+    data.limit_max_baseline_length(max_uv)
+    print(">> Dataset limited to baseline up to %.2f km: " % (max_uv * 1e-3))
+    data.print_info()
 
-    # Example 4: limit max baseline
-    # the uv-coverage is controlled by image_size and the baseline_length_limit,
-    # using larger grids will not actually increase the resolution of the image
-    #baseline_length_limit = 10000
-    #data                  = Data(nr_stations_limit, baseline_length_limit, layout_file)
-    #grid_size             = 2048
-    #image_size            = 0.05
+    # Restrict the number of baselines to nr_baselines
+    data.limit_nr_baselines(nr_baselines)
+    print(">> Dataset limited to %d baselines: " % (nr_baselines))
+    data.print_info()
 
-    # Reduce number of stations and baselines to use
-    nr_stations           = 20
-    nr_baselines          = (nr_stations * (nr_stations - 1)) / 2
-
-    # get remaining parameters
-    cell_size             = image_size / grid_size
+    # Get remaining parameters
+    image_size = round(data.compute_image_size(grid_size), 4)
+    cell_size  = image_size / grid_size
 
 
     ######################################################################
@@ -171,17 +162,17 @@ def main(proxyname):
     ######################################################################
     # print parameters
     ######################################################################
-    print "nr_stations           = ", nr_stations
-    print "nr_baselines          = ", nr_baselines
-    print "nr_channels           = ", nr_channels
-    print "nr_timesteps          = ", nr_timesteps
-    print "nr_timeslots          = ", nr_timeslots
-    print "nr_correlations       = ", nr_correlations
-    print "subgrid_size          = ", subgrid_size
-    print "grid_size             = ", grid_size
-    print "image_size            = ", image_size
-    print "kernel_size           = ", kernel_size
-    print "integration_time      = ", integration_time
+    print("nr_stations           = ", nr_stations)
+    print("nr_baselines          = ", nr_baselines)
+    print("nr_channels           = ", nr_channels)
+    print("nr_timesteps          = ", nr_timesteps)
+    print("nr_timeslots          = ", nr_timeslots)
+    print("nr_correlations       = ", nr_correlations)
+    print("subgrid_size          = ", subgrid_size)
+    print("grid_size             = ", grid_size)
+    print("image_size            = ", image_size)
+    print("kernel_size           = ", kernel_size)
+    print("integration_time      = ", integration_time)
 
     ######################################################################
     # initialize data
@@ -196,7 +187,7 @@ def main(proxyname):
     data.get_uvw(uvw, nr_baselines, nr_timesteps, baseline_offset, time_offset, integration_time)
 
     baselines      = util.get_example_baselines(nr_baselines)
-    grid           = p.get_grid(nr_correlations, grid_size)
+    grid           = p.allocate_grid(nr_correlations, grid_size)
 
     aterms         = util.get_identity_aterms(
                         nr_timeslots, nr_stations, subgrid_size, nr_correlations)
@@ -211,7 +202,9 @@ def main(proxyname):
     ######################################################################
     # plot data
     ######################################################################
-    # util.plot_uvw(uvw)
+    # util.plot_uvw_meters(uvw)
+    # util.plot_uvw_pixels(uvw, frequencies, image_size)
+    # util.plot_tiles(uvw, frequencies, image_size, grid_size, 128)
     # util.plot_frequencies(frequencies)
     # util.plot_spheroidal(spheroidal)
     # util.plot_visibilities(visibilities)

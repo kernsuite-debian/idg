@@ -8,6 +8,9 @@
 #include "BufferSetImpl.h"
 
 #include <mutex>
+#include <csignal>
+
+#include <omp.h>
 
 using namespace std;
 
@@ -92,17 +95,16 @@ namespace api {
             static_cast<int>(antenna2)
         };
 
-        for (int i = 0; i<m_channel_groups.size(); i++)
-        {
-            std::copy(visibilities + m_channel_groups[i].first * m_nrPolarizations,
-                      visibilities + m_channel_groups[i].second * m_nrPolarizations,
-                      (complex<float>*) &m_bufferVisibilities[i](local_bl, local_time, 0));
-        }
+        std::copy(visibilities,
+                  visibilities + m_nr_channels * m_nrPolarizations,
+                  (complex<float>*) &m_bufferVisibilities(local_bl, local_time, 0));
         std::copy(weights, weights + m_nr_channels*4, &m_buffer_weights(local_bl, local_time, 0, 0));
     }
 
     void GridderBufferImpl::compute_avg_beam()
     {
+        m_bufferset->m_avg_beam_watch->Start();
+
         const unsigned int subgrid_size    = m_subgridsize;
         const unsigned int nr_correlations = 4;
         const unsigned int nr_aterms       = m_aterm_offsets2.size() - 1;
@@ -118,6 +120,7 @@ namespace api {
         typedef unsigned int StationPairs[nr_baselines][2];
         typedef float UVW[nr_baselines][nr_timesteps][3];
         typedef float Weights[nr_baselines][nr_timesteps][nr_channels][nr_correlations];
+        typedef float SumOfWeights[nr_baselines][nr_aterms][nr_correlations];
 
         // Cast class members to multidimensional types used in this method
         ATerms       *aterms        = (ATerms *) m_aterms2.data();
@@ -128,8 +131,8 @@ namespace api {
         Weights      *weights       = (Weights *) m_buffer_weights2.data();
 
         // Initialize sum of weights
-        float sum_of_weights[nr_baselines][nr_aterms][nr_correlations];
-        memset(sum_of_weights, 0, nr_baselines * nr_aterms * nr_correlations * sizeof(float));
+        std::vector<float> sum_of_weights_buffer(nr_baselines*nr_aterms*nr_correlations, 0.0);
+        SumOfWeights &sum_of_weights = *((SumOfWeights *) sum_of_weights_buffer.data());
 
         // Compute sum of weights
         #pragma omp parallel for
@@ -139,8 +142,6 @@ namespace api {
 
             // loop over baselines
             for (int bl = 0; bl < nr_baselines; bl++) {
-                unsigned int antenna1 = (*station_pairs)[bl][0];
-                unsigned int antenna2 = (*station_pairs)[bl][1];
 
                 for (int t = time_start; t < time_end; t++)
                 {
@@ -168,6 +169,11 @@ namespace api {
                 for (int bl = 0; bl < nr_baselines; bl++) {
                     unsigned int antenna1 = (*station_pairs)[bl][0];
                     unsigned int antenna2 = (*station_pairs)[bl][1];
+
+                    // Check whether stationPair is initialized
+                    if (antenna1 >= nr_antennas || antenna2 >= nr_antennas) {
+                        continue;
+                    }
 
                     std::complex<float> aXX1 = (*aterms)[n][antenna1][0][i][0];
                     std::complex<float> aXY1 = (*aterms)[n][antenna1][0][i][1];
@@ -231,10 +237,14 @@ namespace api {
                 }
             }
         } // end for pixels
+
+        m_bufferset->m_avg_beam_watch->Pause();
+
     } // end compute_avg_beam
 
     void GridderBufferImpl::flush_thread_worker()
     {
+
         if (m_do_compute_avg_beam)
         {
             compute_avg_beam();
@@ -260,65 +270,40 @@ namespace api {
         options.nr_w_layers = m_nr_w_layers;
         options.plan_strict = false;
 
-        // Iterate all channel groups
-        const int nr_channel_groups = m_channel_groups.size();
-        for (int i = 0; i < nr_channel_groups; i++) {
-            #ifndef NDEBUG
-            std::cout << "gridding channels: " << m_channel_groups[i].first << "-"
-                                               << m_channel_groups[i].second << std::endl;
-            #endif
+        // Create plan
+        m_bufferset->m_plan_watch->Start();
+        Plan plan(
+            m_kernel_size,
+            m_subgridsize,
+            m_gridHeight,
+            m_cellHeight,
+            m_frequencies,
+            m_bufferUVW2,
+            m_bufferStationPairs2,
+            m_aterm_offsets_array,
+            options);
+        m_bufferset->m_plan_watch->Pause();
 
-            // Create plan
-            Plan plan(
-                m_kernel_size,
-                m_subgridsize,
-                m_gridHeight,
-                m_cellHeight,
-                m_grouped_frequencies[i],
-                m_bufferUVW2,
-                m_bufferStationPairs2,
-                m_aterm_offsets_array,
-                options);
-
-            // Initialize gridding for first channel group
-            if (i == 0) {
-                m_proxy->initialize(
-                    plan,
-                    m_wStepInLambda,
-                    m_shift,
-                    m_cellHeight,
-                    m_kernel_size,
-                    m_subgridsize,
-                    m_grouped_frequencies[i],
-                    m_bufferVisibilities2[i],
-                    m_bufferUVW2,
-                    m_bufferStationPairs2,
-                    *m_grid,
-                    m_aterms_array,
-                    m_aterm_offsets_array,
-                    m_spheroidal);
-            }
-
-            // Start flush
-            m_proxy->run_gridding(
-                plan,
-                m_wStepInLambda,
-                m_shift,
-                m_cellHeight,
-                m_kernel_size,
-                m_subgridsize,
-                m_grouped_frequencies[i],
-                m_bufferVisibilities2[i],
-                m_bufferUVW2,
-                m_bufferStationPairs2,
-                *m_grid,
-                m_aterms_array,
-                m_aterm_offsets_array,
-                m_spheroidal);
-        } // end for i (channel groups)
-
-        // Wait for all plans to be executed
-        m_proxy->finish_gridding();
+        // Run gridding
+        m_bufferset->m_gridding_watch->Start();
+        m_proxy->set_grid(m_grid);
+        m_proxy->gridding(
+            plan,
+            m_wStepInLambda,
+            m_shift,
+            m_cellHeight,
+            m_kernel_size,
+            m_subgridsize,
+            m_frequencies,
+            m_bufferVisibilities2,
+            m_bufferUVW2,
+            m_bufferStationPairs2,
+            *m_grid,
+            m_aterms_array,
+            m_aterm_offsets_array,
+            m_spheroidal);
+        m_proxy->get_grid();
+        m_bufferset->m_gridding_watch->Pause();
     }
 
     // Must be called whenever the buffer is full or no more data added
@@ -332,7 +317,7 @@ namespace api {
         if (m_flush_thread.joinable()) m_flush_thread.join();
 
         std::swap(m_bufferUVW, m_bufferUVW2);
-        std::swap(m_bufferStationPairs, m_bufferStationPairs2); 
+        std::swap(m_bufferStationPairs, m_bufferStationPairs2);
         std::swap(m_bufferVisibilities, m_bufferVisibilities2);
         std::swap(m_buffer_weights, m_buffer_weights2);
         std::swap(m_aterm_offsets, m_aterm_offsets2);
@@ -385,17 +370,12 @@ namespace api {
     void GridderBufferImpl::malloc_buffers()
     {
         BufferImpl::malloc_buffers();
-        
-        m_bufferUVW2 = Array2D<UVWCoordinate<float>>(m_nr_baselines, m_bufferTimesteps);
-        m_bufferVisibilities2.clear();
-        for (auto & channel_group : m_channel_groups)
-        {
-            int nr_channels = channel_group.second - channel_group.first;
-            m_bufferVisibilities2.push_back(Array3D<Visibility<std::complex<float>>>(m_nr_baselines, m_bufferTimesteps, nr_channels));
-        }
-        m_bufferStationPairs2 = Array1D<std::pair<unsigned int,unsigned int>>(m_nr_baselines);
-        m_buffer_weights = Array4D<float>(m_nr_baselines, m_bufferTimesteps, m_nr_channels, 4);
-        m_buffer_weights2 = Array4D<float>(m_nr_baselines, m_bufferTimesteps, m_nr_channels, 4);
+
+        m_bufferUVW2 = m_proxy->allocate_array2d<UVW<float>>(m_nr_baselines, m_bufferTimesteps);
+        m_bufferVisibilities2 = m_proxy->allocate_array3d<Visibility<std::complex<float>>>(m_nr_baselines, m_bufferTimesteps, m_nr_channels);
+        m_bufferStationPairs2 = m_proxy->allocate_array1d<std::pair<unsigned int,unsigned int>>(m_nr_baselines);
+        m_buffer_weights = m_proxy->allocate_array4d<float>(m_nr_baselines, m_bufferTimesteps, m_nr_channels, 4);
+        m_buffer_weights2 = m_proxy->allocate_array4d<float>(m_nr_baselines, m_bufferTimesteps, m_nr_channels, 4);
     }
 
 } // namespace api

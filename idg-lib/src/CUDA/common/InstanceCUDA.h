@@ -40,6 +40,7 @@ namespace idg {
                     void measure(PowerRecord &record, cu::Stream &stream);
 
                     void launch_gridder(
+                        int time_offset,
                         int nr_subgrids,
                         int grid_size,
                         int subgrid_size,
@@ -52,11 +53,13 @@ namespace idg {
                         cu::DeviceMemory& d_visibilities,
                         cu::DeviceMemory& d_spheroidal,
                         cu::DeviceMemory& d_aterm,
+                        cu::DeviceMemory& d_aterm_indices,
                         cu::DeviceMemory& d_avg_aterm_correction,
                         cu::DeviceMemory& d_metadata,
                         cu::DeviceMemory& d_subgrid);
 
                     void launch_degridder(
+                        int time_offset,
                         int nr_subgrids,
                         int grid_size,
                         int subgrid_size,
@@ -69,26 +72,51 @@ namespace idg {
                         cu::DeviceMemory& d_visibilities,
                         cu::DeviceMemory& d_spheroidal,
                         cu::DeviceMemory& d_aterm,
+                        cu::DeviceMemory& d_aterm_indices,
                         cu::DeviceMemory& d_metadata,
                         cu::DeviceMemory& d_subgrid);
+
+                    void launch_calibrate(
+                        int nr_subgrids,
+                        int grid_size,
+                        int subgrid_size,
+                        float image_size,
+                        float w_step,
+                        int total_nr_timesteps,
+                        int nr_channels,
+                        int nr_stations,
+                        int nr_terms,
+                        cu::DeviceMemory& d_uvw,
+                        cu::DeviceMemory& d_wavenumbers,
+                        cu::DeviceMemory& d_visibilities,
+                        cu::DeviceMemory& d_weights,
+                        cu::DeviceMemory& d_aterm,
+                        cu::DeviceMemory& d_aterm_derivatives,
+                        cu::DeviceMemory& d_aterm_indices,
+                        cu::DeviceMemory& d_metadata,
+                        cu::DeviceMemory& d_subgrid,
+                        cu::DeviceMemory& d_sums1,
+                        cu::DeviceMemory& d_sums2,
+                        cu::DeviceMemory& d_lmnp,
+                        cu::DeviceMemory& d_hessian,
+                        cu::DeviceMemory& d_gradient,
+                        cu::DeviceMemory& d_residual);
 
                     void launch_grid_fft(
                         cu::DeviceMemory& d_data,
                         int size,
                         DomainAtoDomainB direction);
 
-                    void plan_fft(
-                        unsigned size, unsigned batch);
+                    void plan_subgrid_fft(
+                        unsigned size,
+                        unsigned batch);
 
-                    void launch_fft(
+                    void launch_subgrid_fft(
                         cu::DeviceMemory& d_data,
+                        unsigned nr_subgrids,
                         DomainAtoDomainB direction);
 
-                    void launch_fft_unified(
-                        void *data,
-                        DomainAtoDomainB direction);
-
-                    void launch_fft_unified(
+                    void launch_grid_fft_unified(
                         unsigned long size,
                         unsigned batch,
                         Array3D<std::complex<float>>& grid,
@@ -126,25 +154,6 @@ namespace idg {
                         cu::DeviceMemory& d_subgrid,
                         void *u_grid);
 
-                    void launch_gridder_post(
-                        int nr_subgrids,
-                        int subgrid_size,
-                        int nr_stations,
-                        cu::DeviceMemory& d_spheroidal,
-                        cu::DeviceMemory& d_aterm,
-                        cu::DeviceMemory& d_avg_aterm_correction,
-                        cu::DeviceMemory& d_metadata,
-                        cu::DeviceMemory& d_subgrid);
-
-                    void launch_degridder_pre(
-                        int nr_subgrids,
-                        int subgrid_size,
-                        int nr_stations,
-                        cu::DeviceMemory& d_spheroidal,
-                        cu::DeviceMemory& d_aterm,
-                        cu::DeviceMemory& d_metadata,
-                        cu::DeviceMemory& d_subgrid);
-
                     void launch_scaler(
                         int nr_subgrids,
                         int subgrid_size,
@@ -156,107 +165,65 @@ namespace idg {
                         void *u_subgrid);
 
                     // Memory management per device
-                    cu::HostMemory& get_host_grid(
-                        unsigned int grid_size,
-                        void *ptr = NULL);
-
-                    cu::DeviceMemory& get_device_grid(
-                        unsigned int grid_size);
-
-                    cu::DeviceMemory& get_device_wavenumbers(
-                        unsigned int nr_channels = 0);
-
-                    cu::DeviceMemory& get_device_aterms(
-                        unsigned int nr_stations,
-                        unsigned int nr_timeslots,
-                        unsigned int subgrid_size);
-
-                    cu::DeviceMemory& get_device_spheroidal(
-                        unsigned int subgrid_size);
-
-                    cu::DeviceMemory& get_device_avg_aterm_correction(
-                        unsigned int subgrid_size);
+                    cu::DeviceMemory& allocate_device_grid(size_t bytes);
+                    cu::DeviceMemory& allocate_device_wavenumbers(size_t bytes);
+                    cu::DeviceMemory& allocate_device_aterms(size_t bytes);
+                    cu::DeviceMemory& allocate_device_aterms_indices(size_t bytes);
+                    cu::DeviceMemory& allocate_device_spheroidal(size_t bytes);
+                    cu::DeviceMemory& allocate_device_avg_aterm_correction(size_t bytes);
 
                     // Memory management per stream
-                    cu::HostMemory& get_host_subgrids(
-                        unsigned int id,
-                        unsigned int nr_subgrids,
-                        unsigned int subgrid_size);
+                    cu::HostMemory& allocate_host_subgrids(size_t bytes);
+                    cu::HostMemory& allocate_host_visibilities(size_t bytes);
+                    cu::HostMemory& allocate_host_uvw(size_t bytes);
+                    cu::DeviceMemory& allocate_device_visibilities(unsigned int id, size_t bytes);
+                    cu::DeviceMemory& allocate_device_uvw(unsigned int id, size_t bytes);
+                    cu::DeviceMemory& allocate_device_subgrids(unsigned int id, size_t bytes);
+                    cu::DeviceMemory& allocate_device_metadata(unsigned int id, size_t bytes);
 
-                    cu::HostMemory& get_host_visibilities(
-                        unsigned int id,
-                        unsigned int jobsize,
-                        unsigned int nr_timesteps,
-                        unsigned int nr_channels);
+                    // Memory management for misc device buffers
+                    unsigned int allocate_device_memory(size_t bytes);
+                    cu::DeviceMemory& retrieve_device_memory(unsigned int id);
 
-                    cu::HostMemory& get_host_uvw(
-                        unsigned int id,
-                        unsigned int jobsize,
-                        unsigned int nr_timesteps);
-
-                    cu::HostMemory& get_host_metadata(
-                        unsigned int id,
-                        unsigned int nr_subgrids);
-
-                    cu::DeviceMemory& get_device_wavenumbers(
-                        unsigned int id,
-                        unsigned int nr_channels);
-
-                    cu::DeviceMemory& get_device_visibilities(
-                        unsigned int id,
-                        unsigned int jobsize,
-                        unsigned int nr_timesteps,
-                        unsigned int nr_channels);
-
-                    cu::DeviceMemory& get_device_uvw(
-                        unsigned int id,
-                        unsigned int jobsize,
-                        unsigned int nr_timesteps);
-
-                    cu::DeviceMemory& get_device_subgrids(
-                        unsigned int id,
-                        unsigned int nr_subgrids,
-                        unsigned int subgrid_size);
-
-                    cu::DeviceMemory& get_device_metadata(
-                        unsigned int id,
-                        unsigned int nr_subgrids);
-
-                    // Memory management for large (host) buffers
-                    cu::HostMemory& get_host_visibilities(
-                        unsigned int nr_baselines,
-                        unsigned int nr_timesteps,
-                        unsigned int nr_channels,
-                        void *ptr);
-
-                    cu::HostMemory& get_host_uvw(
-                        unsigned int nr_baselines,
-                        unsigned int nr_timesteps,
-                        void *ptr);
+                    // Memory management for misc page-locked host buffers
+                    void register_host_memory(void* ptr, size_t bytes);
 
                     // Retrieve pre-allocated buffers (per device)
-                    cu::HostMemory& get_host_grid() { return *h_grid; }
-                    cu::DeviceMemory& get_device_grid() { return *d_grid; }
-                    cu::DeviceMemory& get_device_aterms() { return *d_aterms; }
-                    cu::DeviceMemory& get_device_spheroidal() { return *d_spheroidal; }
-                    cu::DeviceMemory& get_device_avg_aterm_correction() { return *d_avg_aterm_correction; }
+                    cu::DeviceMemory& retrieve_device_grid() { return *d_grid.get(); }
+                    cu::DeviceMemory& retrieve_device_aterms() { return *d_aterms; }
+                    cu::DeviceMemory& retrieve_device_aterms_indices() { return *d_aterms_indices; }
+                    cu::DeviceMemory& retrieve_device_aterms_derivatives() { return *d_aterms_derivatives; }
+                    cu::DeviceMemory& retrieve_device_wavenumbers() { return *d_wavenumbers; }
+                    cu::DeviceMemory& retrieve_device_spheroidal() { return *d_spheroidal; }
+                    cu::DeviceMemory& retrieve_device_avg_aterm_correction() { return *d_avg_aterm_correction; }
 
                     // Retrieve pre-allocated buffers (per stream)
-                    cu::HostMemory& get_host_subgrids(unsigned int id) { return *h_subgrids_[id]; }
-                    cu::HostMemory& get_host_visibilities(unsigned int id) { return *h_visibilities_[id]; }
-                    cu::HostMemory& get_host_uvw(unsigned int id) { return *h_uvw_[id]; }
-                    cu::HostMemory& get_host_metadata(unsigned int id) { return *h_metadata_[id]; }
-                    cu::DeviceMemory& get_device_visibilities(unsigned int id) { return *d_visibilities_[id]; }
-                    cu::DeviceMemory& get_device_uvw(unsigned int id) { return *d_uvw_[id]; }
-                    cu::DeviceMemory& get_device_subgrids(unsigned int id) { return *d_subgrids_[id]; }
-                    cu::DeviceMemory& get_device_metadata(unsigned int id) { return *d_metadata_[id]; }
+                    cu::DeviceMemory& retrieve_device_visibilities(unsigned int id) { return *d_visibilities_[id]; }
+                    cu::DeviceMemory& retrieve_device_uvw(unsigned int id) { return *d_uvw_[id]; }
+                    cu::DeviceMemory& retrieve_device_subgrids(unsigned int id) { return *d_subgrids_[id]; }
+                    cu::DeviceMemory& retrieve_device_metadata(unsigned int id) { return *d_metadata_[id]; }
+
+                    // Free buffers
+                    void free_device_wavenumbers() { d_wavenumbers.reset(); };
+                    void free_device_spheroidal() { d_spheroidal.reset(); };
+                    void free_device_aterms() { d_aterms.reset(); };
+                    void free_device_aterms_indices() {d_aterms_indices.reset(); };
+                    void free_device_avg_aterm_correction() { d_avg_aterm_correction.reset(); };
+                    void free_device_visibilities() { d_visibilities_.clear(); };
+                    void free_device_uvw() { d_uvw_.clear(); };
+                    void free_device_subgrids() { d_subgrids_.clear(); };
+                    void free_device_metadata() { d_metadata_.clear();};
+                    void unmap_host_memory() { h_registered_.clear(); };
 
                     // Misc
+                    void free_fft_plans();
+                    int get_tile_size_grid() const { return tile_size_grid; };
+                    void print_device_memory_info();
+
+                private:
                     void free_host_memory();
                     void free_device_memory();
-                    void free_fft_plans();
                     void reset();
-                    int get_tile_size_grid() const { return tile_size_grid; };
 
                 protected:
                     cu::Module* compile_kernel(std::string& flags, std::string& src, std::string& bin);
@@ -275,77 +242,75 @@ namespace idg {
                     ProxyInfo &mInfo;
 
                 private:
-                    cu::Context *context;
-                    cu::Device  *device;
-                    cu::Stream  *executestream;
-                    cu::Stream  *htodstream;
-                    cu::Stream  *dtohstream;
-                    std::vector<cu::Function *> functions_gridder;
-                    std::vector<cu::Function *> functions_degridder;
-                    cu::Function *function_fft;
-                    cu::Function *function_adder;
-                    cu::Function *function_splitter;
-                    cu::Function *function_scaler;
-                    cu::Function *function_gridder_post;
-                    cu::Function *function_degridder_pre;
+                    std::unique_ptr<cu::Context> context;
+                    std::unique_ptr<cu::Device>  device;
+                    std::unique_ptr<cu::Stream> executestream;
+                    std::unique_ptr<cu::Stream> htodstream;
+                    std::unique_ptr<cu::Stream> dtohstream;
+                    std::unique_ptr<cu::Function> function_gridder;
+                    std::unique_ptr<cu::Function> function_degridder;
+                    std::unique_ptr<cu::Function> function_fft;
+                    std::unique_ptr<cu::Function> function_adder;
+                    std::unique_ptr<cu::Function> function_splitter;
+                    std::unique_ptr<cu::Function> function_scaler;
+                    std::vector<std::unique_ptr<cu::Function>> functions_calibrate;
 
                     // One instance per device
-                    cu::DeviceMemory *d_aterms;
-                    cu::DeviceMemory *d_avg_aterm_correction;
-                    cu::DeviceMemory *d_spheroidal;
-                    cu::DeviceMemory *d_grid;
-                    cu::HostMemory *h_visibilities;
-                    cu::HostMemory *h_uvw;
-                    cu::HostMemory *h_grid;
+                    std::unique_ptr<cu::DeviceMemory> d_aterms;
+                    std::unique_ptr<cu::DeviceMemory> d_aterms_indices;
+                    std::unique_ptr<cu::DeviceMemory> d_aterms_derivatives;
+                    std::unique_ptr<cu::DeviceMemory> d_avg_aterm_correction;
+                    std::unique_ptr<cu::DeviceMemory> d_wavenumbers;
+                    std::unique_ptr<cu::DeviceMemory> d_spheroidal;
+                    std::unique_ptr<cu::DeviceMemory> d_grid;
+                    std::unique_ptr<cu::HostMemory>   h_visibilities;
+                    std::unique_ptr<cu::HostMemory>   h_uvw;
+                    std::unique_ptr<cu::HostMemory>   h_subgrids;
 
                     // One instance per stream
-                    std::vector<std::unique_ptr<cu::HostMemory>> h_visibilities_;
-                    std::vector<std::unique_ptr<cu::HostMemory>> h_uvw_;
-                    std::vector<std::unique_ptr<cu::HostMemory>> h_metadata_;
-                    std::vector<std::unique_ptr<cu::HostMemory>> h_subgrids_;
-                    std::vector<std::unique_ptr<cu::DeviceMemory>> d_wavenumbers_;
                     std::vector<std::unique_ptr<cu::DeviceMemory>> d_visibilities_;
                     std::vector<std::unique_ptr<cu::DeviceMemory>> d_uvw_;
                     std::vector<std::unique_ptr<cu::DeviceMemory>> d_metadata_;
                     std::vector<std::unique_ptr<cu::DeviceMemory>> d_subgrids_;
 
-                    // Misc host memory
-                    std::vector<std::unique_ptr<cu::HostMemory>> h_misc_;
+                    // Registered host memory
+                    std::vector<std::unique_ptr<cu::RegisteredMemory>> h_registered_;
+
+                    // Misc device memory
+                    std::vector<std::unique_ptr<cu::DeviceMemory>> d_misc_;
 
                     // All CUDA modules private to this InstanceCUDA
-                    std::vector<cu::Module*> mModules;
+                    std::vector<std::unique_ptr<cu::Module>> mModules;
 
                 protected:
                     dim3 block_gridder;
                     dim3 block_degridder;
+                    dim3 block_calibrate;
                     dim3 block_adder;
                     dim3 block_splitter;
                     dim3 block_scaler;
-                    dim3 block_gridder_post;
-                    dim3 block_degridder_pre;
 
                     int batch_gridder;
                     int batch_degridder;
                     int tile_size_grid;
 
                     // Grid FFT
-                    int fft_grid_size;
-                    cufft::C2C_2D *fft_plan_grid;
+                    int m_fft_grid_size = 0;
+                    std::unique_ptr<cufft::C2C_2D> m_fft_plan_grid;
 
                     // Subgrid FFT
-                    const unsigned fft_bulk_default = 1024;
-                    unsigned fft_bulk  = fft_bulk_default;
-                    unsigned fft_batch = 0;
-                    unsigned fft_size  = 0;
-                    cufft::C2C_2D *fft_plan_bulk;
-                    cufft::C2C_2D *fft_plan_misc;
+                    const unsigned m_fft_subgrid_bulk_default = 1024;
+                    unsigned m_fft_subgrid_bulk  = m_fft_subgrid_bulk_default;
+                    unsigned m_fft_subgrid_size  = 0;
+                    std::unique_ptr<cufft::C2C_2D> m_fft_plan_subgrid;
+                    std::unique_ptr<cu::DeviceMemory> d_fft_subgrid;
 
                 private:
                     // Memory allocation/reuse methods
                     template<typename T>
                     T* reuse_memory(
                         uint64_t size,
-                        T* memory);
+                        std::unique_ptr<T>& memory);
 
                     template<typename T>
                     T* reuse_memory(
@@ -365,6 +330,23 @@ namespace idg {
                         int nr_timesteps,
                         int nr_subgrids);
 
+                    void copy_htoh(
+                        void *dst,
+                        void *src,
+                        size_t bytes);
+
+                    void copy_dtoh(
+                        cu::Stream &stream,
+                        void *dst,
+                        cu::DeviceMemory &src,
+                        size_t bytes);
+
+                    void copy_htod(
+                        cu::Stream &stream,
+                        cu::DeviceMemory &dst,
+                        void *src,
+                        size_t bytes);
+
                 private:
                     void start_measurement(void *data);
                     void end_measurement(void *data);
@@ -378,8 +360,10 @@ namespace idg {
             static const std::string name_splitter  = "kernel_splitter";
             static const std::string name_fft       = "kernel_fft";
             static const std::string name_scaler    = "kernel_scaler";
-            static const std::string name_gridder_post  = "kernel_gridder_post";
-            static const std::string name_degridder_pre = "kernel_degridder_pre";
+            static const std::string name_calibrate_lmnp     = "kernel_calibrate_lmnp";
+            static const std::string name_calibrate_sums     = "kernel_calibrate_sums";
+            static const std::string name_calibrate_gradient = "kernel_calibrate_gradient";
+            static const std::string name_calibrate_hessian  = "kernel_calibrate_hessian";
 
         } // end namespace cuda
     } // end namespace kernel
