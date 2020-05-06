@@ -11,3 +11,4 @@ override_dh_auto_configure:
 		-DBUILD_LIB_OPENCL=OFF \
 		-DBUILD_WITH_PYTHON=ON \
 		-DBUILD_WITH_MKL=OFF
+

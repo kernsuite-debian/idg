@@ -4,7 +4,8 @@ Priority: extra
 Maintainer: KERN packaging <packaging@kernsuite.info>
 Build-Depends:
  cmake,
- debhelper (>=9),
+ debhelper (>=11),
+ dh-python,
  libclfft-dev,       
  dh-python,          
  python-all,         
@@ -12,11 +13,64 @@ Build-Depends:
  nvidia-cuda-toolkit,
  opencl-clhpp-headers,
  liblapack-dev,
- libblas-dev
-Standards-Version: 3.9.8
+ libblas-dev,
+ python3-dev
+Standards-Version: 4.5.0
 Homepage: https://gitlab.com/astron-idg/idg
 
-Package: libidg
+Package: idg-dev
 Architecture: any
 Depends: ${misc:Depends}, ${shlibs:Depends}
-Description: Image Domain Gridding core library
+Description: Image Domain Gridding core library (development files)
+
+Package: libidg0
+Architecture: any
+Depends: ${misc:Depends}, ${shlibs:Depends}
+Description: Image Domain Gridding core library 
+
+
+Package: libidg-api0
+Architecture: any
+Depends: ${misc:Depends}, ${shlibs:Depends}
+Description: Image Domain Gridding api library
+
+Package: libidg-common0
+Architecture: any
+Depends: ${misc:Depends}, ${shlibs:Depends}
+Description: Image Domain Gridding common library
+
+Package: libidg-cpu0
+Architecture: any
+Depends: ${misc:Depends}, ${shlibs:Depends}
+Description: Image Domain Gridding cpu library
+
+Package: libidg-cuda0
+Architecture: any
+Depends: ${misc:Depends}, ${shlibs:Depends}
+Description: Image Domain Gridding cuda library
+
+Package: libidg-external0
+Architecture: any
+Depends: ${misc:Depends}, ${shlibs:Depends}
+Description: Image Domain Gridding external library
+
+Package: libidg-fft0
+Architecture: any
+Depends: ${misc:Depends}, ${shlibs:Depends}
+Description: Image Domain Gridding fft library
+
+Package: libidg-hybrid-cuda0
+Architecture: any
+Depends: ${misc:Depends}, ${shlibs:Depends}
+Description: Image Domain Gridding hybrid library
+
+Package: libidg-util0
+Architecture: any
+Depends: ${misc:Depends}, ${shlibs:Depends}
+Description: Image Domain Gridding util library
+
+Package: python3-idg
+Architecture: any
+Depends: ${misc:Depends}, ${shlibs:Depends}
+Description: image Domain Gridding Python3 library
+

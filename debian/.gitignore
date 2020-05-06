@@ -1,7 +1,19 @@
 .debhelper/
 files
 libidg-dev/
-libidg.debhelper.log
-libidg.substvars
+*.debhelper.log
+*.substvars
 libidg/
+dg-dev/
+libidg-api0/
+libidg-common0/
+libidg-cpu0/
+libidg-cuda0/
+libidg-external0/
+libidg-fft0/
+libidg-hybrid-cuda0/
+libidg-util0/
+libidg0/
+python3-idg/
+tmp/
 

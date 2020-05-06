@@ -1,0 +1,6 @@
+usr/bin/examples
+usr/data
+usr/include/*
+usr/lib/cmake/*cmake
+usr/share/*.cmake 
+

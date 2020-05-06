@@ -1,0 +1,16 @@
+Description: Add missing SOVERSION for idg-util
+
+--- idg-0.7.orig/idg-util/src/CMakeLists.txt
++++ idg-0.7/idg-util/src/CMakeLists.txt
+@@ -27,7 +27,10 @@ target_link_libraries(
+ set_target_properties(
+     idg-util
+     PROPERTIES
+-    PUBLIC_HEADER idg-util.h)
++    PUBLIC_HEADER idg-util.h
++    SOVERSION 0
++    )
++
+ 
+ install(
+     TARGETS idg-util
