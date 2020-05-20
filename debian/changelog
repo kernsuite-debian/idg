@@ -1,3 +1,10 @@
+idg (0.7-1kern4) bionic; urgency=medium
+
+  [ Gijs Molenaar ]
+  * fix python path for bionic
+
+ -- KERN packaging <packaging@kernsuite.info>  Wed, 20 May 2020 11:31:45 +0200
+
 idg (0.7-1kern3) bionic; urgency=medium
 
   [ Gijs Molenaar ]
