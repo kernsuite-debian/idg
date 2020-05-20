@@ -6,6 +6,8 @@
 
 override_dh_auto_configure:
 	dh_auto_configure -- \
+        -DPython_VERSION_MAJOR=3 \
+        -DPython_VERSION_MINOR=6 \
 		-DBUILD_LIB_CPU=ON \
 		-DBUILD_LIB_CUDA=ON \
 		-DBUILD_LIB_OPENCL=OFF \
