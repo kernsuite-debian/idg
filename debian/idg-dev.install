@@ -4,3 +4,5 @@ usr/include/*
 usr/lib/cmake/*cmake
 usr/share/*.cmake 
 usr/lib/*.so
+usr/share/idgapi/cmake/idgapi-config.cmake
+
