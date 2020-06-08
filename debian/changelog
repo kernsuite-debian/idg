@@ -1,3 +1,10 @@
+idg (0.7-1kern5) bionic; urgency=medium
+
+  [ Gijs Molenaar ]
+  * install all cmake files
+
+ -- KERN packaging <packaging@kernsuite.info>  Mon, 08 Jun 2020 11:57:38 +0200
+
 idg (0.7-1kern4) bionic; urgency=medium
 
   [ Gijs Molenaar ]
