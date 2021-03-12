@@ -1,9 +1,16 @@
+idg (0.8-1kern1) focal; urgency=medium
+
+  [ Athanaseus Javas Ramaila ]
+  * New upstream version 0.8
+
+ -- KERN packaging <packaging@kernsuite.info>  Fri, 12 Mar 2021 14:11:31 +0000
+
 idg (0.7-1kern6) focal; urgency=medium
 
   [ Athanaseus Javas Ramaila ]
   * Build for KERN7 (focal)
 
- --  <athanaseus@upload.kernsuite.info>  Sat, 17 Oct 2020 10:08:08 +0000
+ --  KERN packaging <packaging@kernsuite.info>  Sat, 17 Oct 2020 10:08:08 +0000
 
 idg (0.7-1kern5) bionic; urgency=medium
 
