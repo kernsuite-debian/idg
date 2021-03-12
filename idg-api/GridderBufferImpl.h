@@ -1,3 +1,6 @@
+// Copyright (C) 2020 ASTRON (Netherlands Institute for Radio Astronomy)
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 /**
  * GridderBuffer.h
  *
@@ -49,87 +52,84 @@
 namespace idg {
 namespace api {
 
-    class BufferSetImpl;
+class BufferSetImpl;
 
-    class GridderBufferImpl : public virtual GridderBuffer, public BufferImpl
-    {
-    public:
-        // Constructors and destructor
-        GridderBufferImpl(
-            BufferSetImpl *bufferset,
-            proxy::Proxy* proxy,
-            size_t bufferTimesteps);
+class GridderBufferImpl : public virtual GridderBuffer, public BufferImpl {
+ public:
+  // Constructors and destructor
+  GridderBufferImpl(const BufferSetImpl &bufferset, size_t bufferTimesteps);
 
-        virtual ~GridderBufferImpl();
+  virtual ~GridderBufferImpl();
 
-        /** \brief Adds the visibilities to the buffer
-         *  \param timeIndex [in] 0 <= timeIndex < NR_TIMESTEPS
-         *                        or 0 <= timeIndex < bufferTimesteps
-         *  \param antenna1 [in]  0 <= antenna1 < nrStations
-         *  \param antenna2 [in]  antenna1 < antenna2 < nrStations
-         *  \param uvwInMeters [in] double[3]: (u, v, w)
-         *  \param visibilities [in] std::complex<float>[NR_CHANNELS][NR_POLARIZATIONS]
-         */
-        void grid_visibilities(
-            size_t timeIndex,
-            size_t antenna1,
-            size_t antenna2,
-            const double* uvwInMeters,
-            std::complex<float>* visibilities,
-            const float* weights);
+  /** \brief Adds the visibilities to the buffer
+   *  \param timeIndex [in] 0 <= timeIndex < NR_TIMESTEPS
+   *                        or 0 <= timeIndex < bufferTimesteps
+   *  \param antenna1 [in]  0 <= antenna1 < nrStations
+   *  \param antenna2 [in]  antenna1 < antenna2 < nrStations
+   *  \param uvwInMeters [in] double[3]: (u, v, w)
+   *  \param visibilities [in]
+   * std::complex<float>[NR_CHANNELS][NR_POLARIZATIONS]
+   */
+  void grid_visibilities(size_t timeIndex, size_t antenna1, size_t antenna2,
+                         const double *uvwInMeters,
+                         std::complex<float> *visibilities,
+                         const float *weights);
 
-        /** \brief Computes average beam
-         */
-        void compute_avg_beam();
+  /** \brief Configure computing average beams.
+   *  \param beam Pointer to average beam data. If the pointer is null,
+   *         average beam computations are disabled.
+   */
+  void set_avg_beam(std::complex<float> *average_beam) {
+    m_average_beam = average_beam;
+  }
 
-        /** \brief Signal that not more visibilies are gridded */
-        virtual void finished() override;
+  /** \brief Computes average beam
+   */
+  void compute_avg_beam();
 
-        /** \brief Explicitly flush the buffer */
-        virtual void flush() override;
+  /** \brief Signal that not more visibilies are gridded */
+  virtual void finished() override;
 
-        /** \brief Transform the grid; normal use without arguments
-         * No arguments => perform on grid set by set_grid()
-         * Paremeters are need as transform is done on an external grid
-         * i.e. on a copy
-         * param crop_tolerance [in] ...
-         * param nr_polarizations [in] number of correlations (normally 4)
-         * param height [in] width in pixel
-         * param width [in] width in pixel
-         * param grid [in] complex<double>[nr_polarizations][height][width]
-         */
+  /** \brief Explicitly flush the buffer */
+  virtual void flush() override;
 
-        /** reset_aterm() Resets the new aterm for the next time chunk */
-        virtual void reset_aterm();
+  /** \brief Transform the grid; normal use without arguments
+   * No arguments => perform on grid set by set_grid()
+   * Paremeters are need as transform is done on an external grid
+   * i.e. on a copy
+   * param crop_tolerance [in] ...
+   * param nr_polarizations [in] number of correlations (normally 4)
+   * param height [in] width in pixel
+   * param width [in] width in pixel
+   * param grid [in] complex<double>[nr_polarizations][height][width]
+   */
 
-    protected:
-        virtual void malloc_buffers();
+  /** reset_aterm() Resets the new aterm for the next time chunk */
+  virtual void reset_aterm();
 
-    private:
+ protected:
+  virtual void malloc_buffers();
 
-        //secondary buffers      
-        Array2D<UVW<float>> m_bufferUVW2;                       // BL x TI
-        Array1D<std::pair<unsigned int,unsigned int>> m_bufferStationPairs2;                         // BL
-        Array3D<Visibility<std::complex<float>>> m_bufferVisibilities2;   // BL x TI x CH
-        std::vector<Matrix2x2<std::complex<float>>> m_aterms2; // ST x SB x SB
-        Array4D<float> m_buffer_weights;   // BL x TI x NR_CHANNELS x NR_POLARIZATIONS
-        Array4D<float> m_buffer_weights2;   // BL x TI x NR_CHANNELS x NR_POLARIZATIONS
-        std::vector<unsigned int>  m_aterm_offsets2;
+ private:
+  // secondary buffers
+  Array2D<UVW<float>> m_bufferUVW2;  // BL x TI
+  Array1D<std::pair<unsigned int, unsigned int>> m_bufferStationPairs2;  // BL
+  Array3D<Visibility<std::complex<float>>>
+      m_bufferVisibilities2;                              // BL x TI x CH
+  std::vector<Matrix2x2<std::complex<float>>> m_aterms2;  // ST x SB x SB
+  Array4D<float> m_buffer_weights;   // BL x TI x NR_CHANNELS x NR_POLARIZATIONS
+  Array4D<float> m_buffer_weights2;  // BL x TI x NR_CHANNELS x NR_POLARIZATIONS
+  std::vector<unsigned int> m_aterm_offsets2;
 
+  std::thread m_flush_thread;
+  void flush_thread_worker();
 
-        std::thread m_flush_thread;
-        void flush_thread_worker();
+  // Pointer to average beam data in the parent BufferSet.
+  // If it is null, compute_avg_beam() will not run.
+  std::complex<float> *m_average_beam;
+};
 
-        // references to members of parent BufferSet
-        std::vector<std::complex<float>> &m_average_beam;
-        Array4D<std::complex<float>> &m_default_aterm_correction;
-        Array4D<std::complex<float>> &m_avg_aterm_correction;
-        bool &m_do_gridding;
-        bool &m_do_compute_avg_beam;
-        bool &m_apply_aterm;
-    };
-
-} // namespace api
-} // namespace idg
+}  // namespace api
+}  // namespace idg
 
 #endif

@@ -1,3 +1,6 @@
+# Copyright (C) 2020 ASTRON (Netherlands Institute for Radio Astronomy)
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 cmake_minimum_required(VERSION 2.8.0)
 
 # the project
@@ -9,10 +12,7 @@ list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules)
 # options
 option (BUILD_LIB_CPU "Build CPU libraries" ON)
 option (BUILD_LIB_CUDA "Build CUDA libraries" OFF)
-option (BUILD_LIB_OPENCL "Build OpenCL libraries" OFF)
-option (BUILD_WITH_PYTHON "Build Python bindings" OFF)
-option (BUILD_WITH_TESTS "Build with tests" OFF)
-option (BUILD_WITH_DEMOS "Build with demos" OFF)
+#option (BUILD_LIB_OPENCL "Build OpenCL libraries" OFF)
 option (USE_DUMMY_VISIBILITIES "Run C++ examples using dummy visibilities" ON)
 
 # Installation
@@ -100,12 +100,11 @@ include_directories(${CMAKE_CURRENT_BINARY_DIR})
 add_subdirectory(examples)
 
 # build all tests
-if (BUILD_WITH_TESTS)
-    enable_testing()
-    add_subdirectory(tests)
+if (BUILD_TESTING)
+  add_subdirectory(tests)
 endif()
 
 # build all demos
 if (BUILD_WITH_DEMOS)
-    add_subdirectory(demo)
+  add_subdirectory(demo)
 endif()

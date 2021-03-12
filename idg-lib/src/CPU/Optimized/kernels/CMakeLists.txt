@@ -1,3 +1,6 @@
+# Copyright (C) 2020 ASTRON (Netherlands Institute for Radio Astronomy)
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 project(cpu-optimized-kernel)
 
 # Include directories
@@ -37,9 +40,6 @@ else()
         link_libraries(${FFTW3_LIBRARIES})
     endif()
 endif()
-
-# Miscellaneous options
-add_compile_options("-DNR_POLARIZATIONS=4")
 
 # Add libraries
 add_library(${PROJECT_NAME}-gridder   KernelGridder.cpp)
