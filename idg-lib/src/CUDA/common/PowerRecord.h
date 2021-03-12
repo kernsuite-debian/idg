@@ -1,3 +1,6 @@
+// Copyright (C) 2020 ASTRON (Netherlands Institute for Radio Astronomy)
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #ifndef IDG_POWER_RECORD_H_
 #define IDG_POWER_RECORD_H_
 
@@ -8,23 +11,23 @@
 #include "CU.h"
 
 namespace idg {
-    namespace kernel {
-        namespace cuda {
+namespace kernel {
+namespace cuda {
 
-            class PowerRecord {
-                public:
-                    PowerRecord();
-                    PowerRecord(powersensor::PowerSensor *sensor);
+class PowerRecord {
+ public:
+  PowerRecord();
+  PowerRecord(powersensor::PowerSensor *sensor);
 
-                    void enqueue(cu::Stream &stream);
-                    static void getPower(CUstream, CUresult, void *userData);
-                    powersensor::PowerSensor *sensor;
-                    powersensor::State state;
-                    cu::Event event;
-            };
+  void enqueue(cu::Stream &stream);
+  static void getPower(CUstream, CUresult, void *userData);
+  powersensor::PowerSensor *sensor;
+  powersensor::State state;
+  cu::Event event;
+};
 
-        } // end namespace cuda
-    } // end namespace kernel
-} // end namespace idg
+}  // end namespace cuda
+}  // end namespace kernel
+}  // end namespace idg
 
 #endif

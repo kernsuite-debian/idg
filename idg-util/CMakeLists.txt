@@ -1,7 +1,7 @@
-cmake_minimum_required(VERSION 2.8.0)
+# Copyright (C) 2020 ASTRON (Netherlands Institute for Radio Astronomy)
+# SPDX-License-Identifier: GPL-3.0-or-later
 
-# Options
-option (BUILD_WITH_PYTHON "Build Python bindings" OFF)
+cmake_minimum_required(VERSION 2.8.0)
 
 # Installation
 if (CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
