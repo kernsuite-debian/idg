@@ -1,25 +1,27 @@
+// Copyright (C) 2020 ASTRON (Netherlands Institute for Radio Astronomy)
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #ifndef IDG_CPU_REFERENCE2_H_
 #define IDG_CPU_REFERENCE2_H_
 
 #include "idg-cpu.h"
 
 namespace idg {
-    namespace proxy {
-        namespace cpu {
+namespace proxy {
+namespace cpu {
 
-            class Reference : public CPU {
-                public:
-                    // Constructor
-                    Reference(
-                        std::vector<std::string> libraries = default_libraries());
+class Reference : public CPU {
+ public:
+  // Constructor
+  Reference(std::vector<std::string> libraries = default_libraries());
 
-                private:
-                    static std::vector<std::string> default_libraries();
+ private:
+  static std::vector<std::string> default_libraries();
 
-            }; // class Reference
+};  // class Reference
 
-        } // namespace cpu
-    } // namespace proxy
-} // namespace idg
+}  // namespace cpu
+}  // namespace proxy
+}  // namespace idg
 
 #endif
