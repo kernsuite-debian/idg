@@ -1,19 +1,9 @@
+# Copyright (C) 2020 ASTRON (Netherlands Institute for Radio Astronomy)
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 cmake_minimum_required(VERSION 2.8.0)
 
 project(idg-api)
-
-
-# options
-option (BUILD_STATIC_LIBS "Build static libraries" OFF)
-option (BUILD_WITH_TESTS "Build with tests" OFF)
-
-# build shared or static libraries (default: shared)
-if (BUILD_STATIC_LIBS)
-set (BUILD_SHARED_LIBS FALSE)
-else()
-set (BUILD_SHARED_LIBS TRUE)
-endif()
-
 
 # make sure C++11 is used (in newer CMake use CXX_STANDARD)
 include(CheckCXXCompilerFlag)
@@ -81,8 +71,7 @@ else()
 endif()
 
 # build all tests
-if (BUILD_WITH_TESTS)
-    enable_testing()
+if (BUILD_TESTING)
     add_subdirectory(tests)
 endif()
 
@@ -91,8 +80,9 @@ endif()
 set (${PROJECT_NAME}_headers
     Buffer.h
     BufferSet.h
-    GridderBuffer.h
+    BulkDegridder.h
     DegridderBuffer.h
+    GridderBuffer.h
     taper.h
     Value.h
 )
@@ -100,22 +90,23 @@ set (${PROJECT_NAME}_headers
 set (${PROJECT_NAME}_sources
     Buffer.cpp
     BufferSet.cpp
-    GridderBuffer.cpp
+    BulkDegridder.cpp
     DegridderBuffer.cpp
+    GridderBuffer.cpp
     taper.cpp
 )
 
 # enable rpath
-set(CMAKE_INSTALL_RPATH ${CUDA_LIB_DIR})
+SET(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/lib" ${CUDA_LIB_DIR})
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 
 add_library(
   ${PROJECT_NAME} ${${PROJECT_NAME}_headers}
                   ${${PROJECT_NAME}_sources}
 )
-set_target_properties(${PROJECT_NAME} PROPERTIES COMPILE_FLAGS "-fPIC" SOVERSION 0)
+set_target_properties(${PROJECT_NAME} PROPERTIES COMPILE_FLAGS "-fPIC"  SOVERSION 1)
 target_link_libraries (
-    ${PROJECT_NAME} 
+    ${PROJECT_NAME}
     ${${PROJECT_NAME}_link_libraries}
 )
 
@@ -147,10 +138,15 @@ install(TARGETS ${PROJECT_NAME}
 install(EXPORT IDGAPITargets
         DESTINATION lib/cmake)
 
+# Prepare config files
 configure_file(
     "${PROJECT_SOURCE_DIR}/cmake/config/idgapi-config.cmake.in"
     "${PROJECT_BINARY_DIR}/CMakeFiles/idgapi-config.cmake" @ONLY)
+configure_file(
+    "${PROJECT_SOURCE_DIR}/cmake/config/idgapi-config-version.cmake.in"
+    "${PROJECT_BINARY_DIR}/CMakeFiles/idgapi-config-version.cmake" @ONLY)
 
 install(FILES
     "${PROJECT_BINARY_DIR}/CMakeFiles/idgapi-config.cmake"
+    "${PROJECT_BINARY_DIR}/CMakeFiles/idgapi-config-version.cmake"
     DESTINATION ${CMAKE_INSTALL_PREFIX}/share/idgapi/cmake)
