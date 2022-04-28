@@ -18,14 +18,14 @@ class Data {
   /*
    * Constructor
    */
-  Data(std::string layout_file = "LOFAR_lba.txt");
+  Data(std::string layout_file);
 
   /*
    * Parameters
    */
-  float compute_image_size(unsigned long grid_size);
-  float compute_max_uv(unsigned long grid_size);
-  unsigned int compute_grid_size();
+  float compute_image_size(unsigned long grid_size, unsigned int nr_channels);
+  float compute_max_uv(unsigned long grid_size, unsigned int nr_channels);
+  unsigned int compute_grid_size(unsigned int nr_channels);
 
   /*
    * Select baselines
@@ -71,7 +71,7 @@ class Data {
   /*
    * Set station_coordinates
    */
-  void set_station_coordinates(std::string layout_file);
+  void set_station_coordinates(const std::string& layout_file);
 
   std::vector<StationCoordinate> m_station_coordinates;
 

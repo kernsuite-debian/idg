@@ -6,13 +6,19 @@
 #include <stdlib.h>
 #include <stdint.h>
 
-#include "Types.h"
-#include "Index.h"
+#include "common/Types.h"
+#include "common/Index.h"
 
-extern "C" {
-void kernel_splitter(const long nr_subgrids, const long grid_size,
-                     const int subgrid_size, const idg::Metadata* metadata,
-                     idg::float2* subgrid, const idg::float2* grid) {
+namespace idg {
+namespace kernel {
+namespace cpu {
+namespace optimized {
+
+void kernel_splitter(const long nr_subgrids, const int nr_polarizations,
+                     const long grid_size, const int subgrid_size,
+                     const idg::Metadata* metadata,
+                     std::complex<float>* subgrid,
+                     const std::complex<float>* grid) {
   // Precompute phaosr
   float phasor_real[subgrid_size][subgrid_size];
   float phasor_imag[subgrid_size][subgrid_size];
@@ -37,8 +43,8 @@ void kernel_splitter(const long nr_subgrids, const long grid_size,
     bool negative_w = subgrid_w < 0;
 
     // Determine polarization index
-    const int index_pol_default[NR_POLARIZATIONS] = {0, 1, 2, 3};
-    const int index_pol_transposed[NR_POLARIZATIONS] = {0, 2, 1, 3};
+    const int index_pol_default[4] = {0, 1, 2, 3};
+    const int index_pol_transposed[4] = {0, 2, 1, 3};
     int* index_pol =
         (int*)(subgrid_w < 0 ? index_pol_default : index_pol_transposed);
 
@@ -58,15 +64,16 @@ void kernel_splitter(const long nr_subgrids, const long grid_size,
           continue;
 
         // Load phasor
-        idg::float2 phasor = {phasor_real[y][x], phasor_imag[y][x]};
+        std::complex<float> phasor = {phasor_real[y][x], phasor_imag[y][x]};
 
         // Set grid value to subgrid
-        for (int pol = 0; pol < NR_POLARIZATIONS; pol++) {
+        for (int pol = 0; pol < nr_polarizations; pol++) {
           int pol_src = index_pol[pol];
-          long src_idx =
-              index_grid(grid_size, subgrid_w, pol_src, y_src, x_src);
-          long dst_idx = index_subgrid(subgrid_size, s, pol, y_dst, x_dst);
-          idg::float2 value = grid[src_idx];
+          long src_idx = index_grid_4d(nr_polarizations, grid_size, subgrid_w,
+                                       pol_src, y_src, x_src);
+          long dst_idx = index_subgrid(nr_polarizations, subgrid_size, s, pol,
+                                       y_dst, x_dst);
+          std::complex<float> value = grid[src_idx];
           value = negative_w ? conj(value) : value;
           subgrid[dst_idx] = phasor * value;
         }  // end for pol
@@ -74,4 +81,8 @@ void kernel_splitter(const long nr_subgrids, const long grid_size,
     }      // end for y
   }        // end for s
 }  // end kernel_splitter
-}  // end extern "C"
+
+}  // end namespace optimized
+}  // end namespace cpu
+}  // end namespace kernel
+}  // end namespace idg

@@ -23,12 +23,15 @@ void init(unsigned flags = 0);
 template <typename T>
 class Error : public std::exception {
  public:
-  Error(T result) : _result(result) {}
+  Error(T result, std::string &message) : _result(result), _message(message) {}
+
+  const char *what() const throw() { return _message.c_str(); };
 
   operator T() const { return _result; }
 
  private:
   T _result;
+  std::string _message;
 };
 
 class Device {
@@ -61,120 +64,82 @@ class Device {
 
 class Context {
  public:
-  Context();
   Context(Device &device, int flags = 0);
   ~Context();
-  void setCurrent() const;
-  void setCacheConfig(CUfunc_cache config);
-  void setSharedMemConfig(CUsharedconfig config);
-  void synchronize();
-  void reset();
-
-  operator CUcontext();
 
  private:
+  void setCurrent() const;
+  void freeCurrent() const;
   CUcontext _context;
   CUdevice _device;
+
+  friend class ScopedContext;
 };
 
-class Memory : public idg::auxiliary::Memory {
- protected:
-  Memory() : idg::auxiliary::Memory(nullptr) {}
-
+class ScopedContext {
  public:
-  size_t capacity() { return m_capacity; }
-  void *ptr() { return get(); }
-  size_t size() { return m_bytes; }
-  virtual void resize(size_t size) = 0;
-  template <typename T>
-  operator T *() {
-    return static_cast<T *>(get());
-  }
+  ScopedContext(const Context &context);
+  ~ScopedContext();
 
- protected:
-  size_t m_bytes;
-  size_t m_capacity = 0;
+ private:
+  const Context &_context;
 };
 
-class HostMemory : public Memory {
+class HostMemory : public idg::auxiliary::Memory {
  public:
-  HostMemory(size_t size = 0, int flags = CU_MEMHOSTALLOC_PORTABLE);
+  HostMemory(const Context &context, size_t size = 0,
+             int flags = CU_MEMHOSTALLOC_PORTABLE);
   ~HostMemory() override;
-
-  void resize(size_t size) override;
-  void zero();
 
  private:
   void release();
-  int _flags;
+  const Context &context_;
+  int flags_;
 };
 
-class RegisteredMemory : public Memory {
+class RegisteredMemory : public idg::auxiliary::Memory {
  public:
-  RegisteredMemory(void *ptr, size_t size,
+  RegisteredMemory(const Context &context, void *ptr, size_t size,
                    int flags = CU_MEMHOSTREGISTER_PORTABLE);
   ~RegisteredMemory() override;
 
-  void resize(size_t size) override;
-  void zero();
+ private:
+  void release();
+  const Context &context_;
+  int flags_;
+};
+
+class DeviceMemory : public idg::auxiliary::Memory {
+ public:
+  DeviceMemory(const Context &context, size_t size);
+  ~DeviceMemory();
+
+  void zero() override;
+  void zero(CUstream stream);
+
+  operator CUdeviceptr() { return device_ptr_; }
 
  private:
   void release();
-  int _flags;
+  const Context &context_;
+  CUdeviceptr device_ptr_;
 };
 
-class DeviceMemory {
+class UnifiedMemory : public idg::auxiliary::Memory {
  public:
-  DeviceMemory(size_t size);
-  ~DeviceMemory();
+  UnifiedMemory(const Context &context, size_t size,
+                unsigned flags = CU_MEM_ATTACH_GLOBAL);
+  ~UnifiedMemory() override;
 
-  size_t capacity();
-  size_t size();
-  void resize(size_t size);
-  void zero(CUstream stream = NULL);
+  operator CUdeviceptr() { return reinterpret_cast<CUdeviceptr>(data()); }
 
-  template <typename T>
-  operator T *() {
-    if (_size) {
-      return static_cast<T *>(&_ptr);
-    } else {
-      return static_cast<T *>(&_nullptr);
-    }
-  }
-
-  template <typename T>
-  operator T() {
-    if (_size) {
-      return static_cast<T>(_ptr);
-    } else {
-      return static_cast<T>(_nullptr);
-    }
-  }
-
- private:
-  CUdeviceptr _ptr;
-  size_t _capacity;
-  size_t _size;
-  static const CUdeviceptr _nullptr = 0;
-};
-
-class UnifiedMemory {
- public:
-  UnifiedMemory(void *ptr, size_t size);
-  UnifiedMemory(size_t size, unsigned flags = CU_MEM_ATTACH_GLOBAL);
-  ~UnifiedMemory();
-
-  template <typename T>
-  operator T *() {
-    return static_cast<T *>((void *)_ptr);
-  }
   void set_advice(CUmem_advise advise);
   void set_advice(CUmem_advise advise, Device &device);
 
  private:
-  CUdeviceptr _ptr;
-  size_t _size;
-  bool free = false;
+  void release();
+  const Context &context_;
+  int flags_ = 0;
 };
 
 class Source {
@@ -189,20 +154,21 @@ class Source {
 
 class Module {
  public:
-  Module(const char *file_name);
-  Module(const void *data);
+  Module(const Context &context, const char *file_name);
+  Module(const Context &context, const void *data);
   ~Module();
 
   operator CUmodule();
 
  private:
+  const Context &_context;
   CUmodule _module;
 };
 
 class Function {
  public:
-  Function(Module &module, const char *name);
-  Function(CUfunction function);
+  Function(const Context &context, Module &module, const char *name);
+  Function(const Context &context, CUfunction function);
 
   int get_attribute(CUfunction_attribute attribute);
   void setCacheConfig(CUfunc_cache config);
@@ -210,12 +176,17 @@ class Function {
   operator CUfunction();
 
  private:
+  const Context &_context;
   CUfunction _function;
 };
 
 class Event {
  public:
-  Event(int flags = CU_EVENT_DEFAULT);
+  Event(const Context &context, int flags = CU_EVENT_DEFAULT);
+  Event(const Event &event) = delete;
+  Event(Event &&event);
+  Event &operator=(const Event &event) = delete;
+  Event &operator=(Event &&event);
   ~Event();
 
   void synchronize();
@@ -224,14 +195,18 @@ class Event {
   operator CUevent();
 
  private:
+  const Context *_context;
   CUevent _event;
 };
 
 class Stream {
  public:
-  Stream(int flags = CU_STREAM_DEFAULT);
+  Stream(const Context &context, int flags = CU_STREAM_DEFAULT);
   ~Stream();
 
+  void memcpyHtoD(CUdeviceptr devPtr, const void *hostPtr, size_t size);
+  void memcpyDtoH(void *hostPtr, CUdeviceptr devPtr, size_t size);
+  void memcpyDtoD(CUdeviceptr dstPtr, CUdeviceptr srcPtr, size_t size);
   void memcpyHtoDAsync(CUdeviceptr devPtr, const void *hostPtr, size_t size);
   void memcpyDtoHAsync(void *hostPtr, CUdeviceptr devPtr, size_t size);
   void memcpyDtoDAsync(CUdeviceptr dstPtr, CUdeviceptr srcPtr, size_t size);
@@ -250,6 +225,7 @@ class Stream {
   operator CUstream();
 
  private:
+  const Context &_context;
   CUstream _stream;
 };
 

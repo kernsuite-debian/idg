@@ -18,26 +18,25 @@ inline int max(int a, int b) { return a > b ? a : b; }
 
 namespace idg {
 namespace auxiliary {
-#define NR_CORRELATIONS 4
 
 /*
     Operation and byte count
 */
 uint64_t flops_gridder(uint64_t nr_channels, uint64_t nr_timesteps,
                        uint64_t nr_subgrids, uint64_t subgrid_size,
-                       uint64_t nr_correlations = 4);
+                       uint64_t nr_correlations);
 
 uint64_t bytes_gridder(uint64_t nr_channels, uint64_t nr_timesteps,
                        uint64_t nr_subgrids, uint64_t subgrid_size,
-                       uint64_t nr_correlations = 4);
+                       uint64_t nr_correlations);
 
 uint64_t flops_degridder(uint64_t nr_channels, uint64_t nr_timesteps,
                          uint64_t nr_subgrids, uint64_t subgrid_size,
-                         uint64_t nr_correlations = 4);
+                         uint64_t nr_correlations);
 
 uint64_t bytes_degridder(uint64_t nr_channels, uint64_t nr_timesteps,
                          uint64_t nr_subgrids, uint64_t subgrid_size,
-                         uint64_t nr_correlations = 4);
+                         uint64_t nr_correlations);
 
 uint64_t flops_calibrate(uint64_t nr_terms, uint64_t nr_channels,
                          uint64_t nr_timesteps, uint64_t nr_subgrids,
@@ -50,14 +49,16 @@ uint64_t flops_fft(uint64_t size, uint64_t batch, uint64_t nr_correlations = 4);
 uint64_t bytes_fft(uint64_t size, uint64_t batch, uint64_t nr_correlations = 4);
 
 uint64_t flops_adder(uint64_t nr_subgrids, uint64_t subgrid_size,
-                     uint64_t nr_correlations = 4);
+                     uint64_t nr_correlations);
 
 uint64_t bytes_adder(uint64_t nr_subgrids, uint64_t subgrid_size,
-                     uint64_t nr_correlations = 4);
+                     uint64_t nr_correlations);
 
-uint64_t flops_splitter(uint64_t nr_subgrids, uint64_t subgrid_size);
+uint64_t flops_splitter(uint64_t nr_subgrids, uint64_t subgrid_size,
+                        uint64_t nr_correlations);
 
-uint64_t bytes_splitter(uint64_t nr_subgrids, uint64_t subgrid_size);
+uint64_t bytes_splitter(uint64_t nr_subgrids, uint64_t subgrid_size,
+                        uint64_t nr_correlations);
 
 uint64_t flops_scaler(uint64_t nr_subgrids, uint64_t subgrid_size,
                       uint64_t nr_correlations = 4);
@@ -70,16 +71,17 @@ uint64_t bytes_scaler(uint64_t nr_subgrids, uint64_t subgrid_size,
 */
 uint64_t sizeof_visibilities(unsigned int nr_baselines,
                              unsigned int nr_timesteps,
-                             unsigned int nr_channels);
+                             unsigned int nr_channels,
+                             unsigned int nr_correlations);
 
 uint64_t sizeof_uvw(unsigned int nr_baselines, unsigned int nr_timesteps);
 
 uint64_t sizeof_subgrids(unsigned int nr_subgrids, unsigned int subgrid_size,
-                         uint64_t nr_correlations = 4);
+                         unsigned int nr_correlations);
 
 uint64_t sizeof_metadata(unsigned int nr_subgrids);
 
-uint64_t sizeof_grid(unsigned int grid_size, uint64_t nr_correlations = 4);
+uint64_t sizeof_grid(unsigned int grid_size, uint64_t nr_correlations);
 
 uint64_t sizeof_wavenumbers(unsigned int nr_channels);
 
@@ -108,6 +110,7 @@ uint64_t sizeof_weights(unsigned int nr_baselines, unsigned int nr_timesteps,
 std::vector<int> split_int(const char *string, const char *delimiter);
 std::vector<std::string> split_string(char *string, const char *delimiter);
 
+std::string get_inc_dir();
 std::string get_lib_dir();
 
 size_t get_nr_threads();
@@ -129,29 +132,33 @@ class Memory {
   Memory &operator=(const Memory &) = delete;
   Memory &operator=(Memory &&) = delete;
 
-  void *get() { return m_ptr; };
+  void *data() { return ptr_; };
+  size_t size() { return size_; };
+  virtual void zero() { std::fill_n(static_cast<char *>(data()), size(), 0); };
 
  protected:
-  Memory(void *ptr) : m_ptr(ptr) {}
-  void set(void *ptr) { m_ptr = ptr; }
+  explicit Memory(size_t size) : size_(size) {}
+  Memory(void *ptr, size_t size) : ptr_(ptr) {}
+  void set(void *ptr) { ptr_ = ptr; }
 
  private:
-  void *m_ptr = nullptr;
+  void *ptr_ = nullptr;
+  size_t size_ = 0;
 };
 
 class DefaultMemory : public Memory {
  public:
-  DefaultMemory(size_t bytes = 0);
+  DefaultMemory(size_t size);
   ~DefaultMemory() override;
 };
 
 class AlignedMemory : public Memory {
  public:
-  AlignedMemory(size_t bytes = 0);
+  AlignedMemory(size_t size);
   ~AlignedMemory() override;
 
  private:
-  static const size_t m_alignment = 64;
+  static const unsigned int alignment_ = 64;
 };
 
 }  // namespace auxiliary

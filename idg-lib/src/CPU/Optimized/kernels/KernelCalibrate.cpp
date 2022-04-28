@@ -1,18 +1,10 @@
 // Copyright (C) 2020 ASTRON (Netherlands Institute for Radio Astronomy)
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-#include <cmath>
-#include <iostream>
-
-#if defined(USE_VML)
-#define VML_PRECISION VML_LA
-#include <mkl_vml.h>
-#endif
-
 #include "common/memory.h"
+#include "common/Types.h"
+#include "common/Index.h"
 
-#include "Types.h"
-#include "Index.h"
 #include "Math.h"
 
 #if not defined(__PPC__)
@@ -28,20 +20,25 @@ inline size_t index_phasors(unsigned int nr_timesteps, unsigned int nr_channels,
          static_cast<size_t>(pixel);
 }
 
-extern "C" {
+namespace idg {
+namespace kernel {
+namespace cpu {
+namespace optimized {
 
 void kernel_calibrate(
-    const unsigned int nr_subgrids, const unsigned int grid_size,
-    const unsigned int subgrid_size, const float image_size,
-    const float w_step_in_lambda, const float* __restrict__ shift,
-    const unsigned int max_nr_timesteps, const unsigned int nr_channels,
-    const unsigned int nr_stations, const unsigned int nr_terms,
-    const unsigned int nr_time_slots, const idg::UVW<float>* uvw,
-    const float* wavenumbers, idg::float2* visibilities, const float* weights,
-    const idg::float2* aterms, const idg::float2* aterm_derivatives,
-    const int* aterms_indices, const idg::Metadata* metadata,
-    const idg::float2* subgrid, const idg::float2* phasors, double* hessian,
-    double* gradient, double* residual) {
+    const unsigned int nr_subgrids, const unsigned int nr_polarizations,
+    const unsigned long grid_size, const unsigned int subgrid_size,
+    const float image_size, const float w_step_in_lambda,
+    const float* __restrict__ shift, const unsigned int max_nr_timesteps,
+    const unsigned int nr_channels, const unsigned int nr_stations,
+    const unsigned int nr_terms, const unsigned int nr_time_slots,
+    const idg::UVW<float>* uvw, const float* wavenumbers,
+    std::complex<float>* visibilities, const float* weights,
+    const std::complex<float>* aterms,
+    const std::complex<float>* aterm_derivatives, const int* aterms_indices,
+    const idg::Metadata* metadata, const std::complex<float>* subgrid,
+    const std::complex<float>* phasors, double* hessian, double* gradient,
+    double* residual) {
 #if defined(USE_LOOKUP)
   initialize_lookup();
 #endif
@@ -119,45 +116,48 @@ void kernel_calibrate(
             int y_src = (y + (subgrid_size / 2)) % subgrid_size;
 
             // Load pixel values
-            idg::float2 pixels[NR_POLARIZATIONS];
-            for (int pol = 0; pol < NR_POLARIZATIONS; pol++) {
-              size_t src_idx =
-                  index_subgrid(subgrid_size, s, pol, y_src, x_src);
+            std::complex<float> pixels[nr_polarizations];
+            for (unsigned int pol = 0; pol < nr_polarizations; pol++) {
+              size_t src_idx = index_subgrid(nr_polarizations, subgrid_size, s,
+                                             pol, y_src, x_src);
               pixels[pol] = subgrid[src_idx];
             }
 
             // Get pointer to first aterm
-            idg::float2* aterm1_ptr;
+            std::complex<float>* aterm1_ptr;
 
             if (term_nr == nr_terms) {
               unsigned int station1_idx =
-                  index_aterm(subgrid_size, nr_stations, aterm_idx_current,
-                              station1, y, x, 0);
-              aterm1_ptr = (idg::float2*)&aterms[station1_idx];
+                  index_aterm(subgrid_size, nr_polarizations, nr_stations,
+                              aterm_idx_current, station1, y, x, 0);
+              aterm1_ptr = (std::complex<float>*)&aterms[station1_idx];
             } else {
-              unsigned int station1_idx = index_aterm(
-                  subgrid_size, nr_terms, aterm_idx_current, term_nr, y, x, 0);
-              aterm1_ptr = (idg::float2*)&aterm_derivatives[station1_idx];
+              unsigned int station1_idx =
+                  index_aterm(subgrid_size, nr_polarizations, nr_terms,
+                              aterm_idx_current, term_nr, y, x, 0);
+              aterm1_ptr =
+                  (std::complex<float>*)&aterm_derivatives[station1_idx];
             }
 
             // Get pointer to second aterm
             unsigned int station2_idx =
-                index_aterm(subgrid_size, nr_stations, aterm_idx_current,
-                            station2, y, x, 0);
-            idg::float2* aterm2_ptr = (idg::float2*)&aterms[station2_idx];
+                index_aterm(subgrid_size, nr_polarizations, nr_stations,
+                            aterm_idx_current, station2, y, x, 0);
+            std::complex<float>* aterm2_ptr =
+                (std::complex<float>*)&aterms[station2_idx];
 
             // Apply aterm
             apply_aterm_degridder(pixels, aterm1_ptr, aterm2_ptr);
 
             // Store pixels
-            pixels_xx_real[term_nr][i] = pixels[0].real;
-            pixels_xy_real[term_nr][i] = pixels[1].real;
-            pixels_yx_real[term_nr][i] = pixels[2].real;
-            pixels_yy_real[term_nr][i] = pixels[3].real;
-            pixels_xx_imag[term_nr][i] = pixels[0].imag;
-            pixels_xy_imag[term_nr][i] = pixels[1].imag;
-            pixels_yx_imag[term_nr][i] = pixels[2].imag;
-            pixels_yy_imag[term_nr][i] = pixels[3].imag;
+            pixels_xx_real[term_nr][i] = pixels[0].real();
+            pixels_xy_real[term_nr][i] = pixels[1].real();
+            pixels_yx_real[term_nr][i] = pixels[2].real();
+            pixels_yy_real[term_nr][i] = pixels[3].real();
+            pixels_xx_imag[term_nr][i] = pixels[0].imag();
+            pixels_xy_imag[term_nr][i] = pixels[1].imag();
+            pixels_yx_imag[term_nr][i] = pixels[2].imag();
+            pixels_yy_imag[term_nr][i] = pixels[3].imag();
           }  // end for terms
         }    // end for pixels
 
@@ -173,22 +173,18 @@ void kernel_calibrate(
         for (unsigned i = 0; i < nr_pixels; i++) {
           unsigned idx = index_phasors(max_nr_timesteps, nr_channels,
                                        subgrid_size, s, time, chan, i);
-          idg::float2 phasor = phasors[idx];
-          phasor_real[i] = phasor.real;
-          phasor_imag[i] = phasor.imag;
+          std::complex<float> phasor = phasors[idx];
+          phasor_real[i] = phasor.real();
+          phasor_imag[i] = phasor.imag();
         }
 
         // Compute visibilities
-        float sums_real[NR_POLARIZATIONS][nr_terms + 1];
-        float sums_imag[NR_POLARIZATIONS][nr_terms + 1];
+        float sums_real[nr_polarizations][nr_terms + 1];
+        float sums_imag[nr_polarizations][nr_terms + 1];
 
         for (unsigned int term_nr = 0; term_nr < (nr_terms + 1); term_nr++) {
-          idg::float2 sum[NR_POLARIZATIONS];
-
-          for (unsigned pol = 0; pol < NR_POLARIZATIONS; pol++) {
-            sum[pol].real = 0;
-            sum[pol].imag = 0;
-          }
+          std::complex<float> sum[nr_polarizations]
+              __attribute__((aligned(ALIGNMENT)));
 
           compute_reduction(nr_pixels, pixels_xx_real[term_nr],
                             pixels_xy_real[term_nr], pixels_yx_real[term_nr],
@@ -199,32 +195,32 @@ void kernel_calibrate(
 
           // Store and scale sums
           const float scale = 1.0f / nr_pixels;
-          for (unsigned pol = 0; pol < NR_POLARIZATIONS; pol++) {
-            sums_real[pol][term_nr] = sum[pol].real * scale;
-            sums_imag[pol][term_nr] = sum[pol].imag * scale;
+          for (unsigned pol = 0; pol < nr_polarizations; pol++) {
+            sums_real[pol][term_nr] = sum[pol].real() * scale;
+            sums_imag[pol][term_nr] = sum[pol].imag() * scale;
           }
         }
 
         // Compute residual visibilities
-        float visibility_res_real[NR_POLARIZATIONS];
-        float visibility_res_imag[NR_POLARIZATIONS];
-        for (unsigned int pol = 0; pol < NR_POLARIZATIONS; pol++) {
+        float visibility_res_real[nr_polarizations];
+        float visibility_res_imag[nr_polarizations];
+        for (unsigned int pol = 0; pol < nr_polarizations; pol++) {
           int time_idx = time_offset + time;
           int chan_idx = chan;
-          size_t vis_idx =
-              index_visibility(nr_channels, time_idx, chan_idx, pol);
+          size_t vis_idx = index_visibility(nr_polarizations, nr_channels,
+                                            time_idx, chan_idx, pol);
           visibility_res_real[pol] =
-              visibilities[vis_idx].real - sums_real[pol][nr_terms];
+              visibilities[vis_idx].real() - sums_real[pol][nr_terms];
           visibility_res_imag[pol] =
-              visibilities[vis_idx].imag - sums_imag[pol][nr_terms];
+              visibilities[vis_idx].imag() - sums_imag[pol][nr_terms];
         }
 
         // Update local residual and gradient
-        for (unsigned int pol = 0; pol < NR_POLARIZATIONS; pol++) {
+        for (unsigned int pol = 0; pol < nr_polarizations; pol++) {
           int time_idx = time_offset + time;
           int chan_idx = chan;
-          size_t vis_idx =
-              index_visibility(nr_channels, time_idx, chan_idx, pol);
+          size_t vis_idx = index_visibility(nr_polarizations, nr_channels,
+                                            time_idx, chan_idx, pol);
           residual_local[s] +=
               weights[vis_idx] *
               (visibility_res_real[pol] * visibility_res_real[pol] +
@@ -238,11 +234,11 @@ void kernel_calibrate(
         }
 
         // Update local hessian
-        for (unsigned int pol = 0; pol < NR_POLARIZATIONS; pol++) {
+        for (unsigned int pol = 0; pol < nr_polarizations; pol++) {
           int time_idx = time_offset + time;
           int chan_idx = chan;
-          size_t vis_idx =
-              index_visibility(nr_channels, time_idx, chan_idx, pol);
+          size_t vis_idx = index_visibility(nr_polarizations, nr_channels,
+                                            time_idx, chan_idx, pol);
           for (unsigned int term_nr1 = 0; term_nr1 < nr_terms; term_nr1++) {
             for (unsigned int term_nr0 = 0; term_nr0 < nr_terms; term_nr0++) {
               hessian_local[s][aterm_idx_current][term_nr1][term_nr0] +=
@@ -286,32 +282,13 @@ void kernel_calibrate(
 
 }  // end kernel_calibrate
 
-void kernel_calibrate_hessian_vector_product1(
-    const unsigned int nr_subgrids, const unsigned int grid_size,
-    const unsigned int subgrid_size, const float image_size,
-    const float w_step_in_lambda, const float* __restrict__ shift,
-    const unsigned int max_nr_timesteps, const unsigned int nr_channels,
-    const unsigned int nr_stations, const unsigned int nr_terms,
-    const unsigned int nr_time_slots, const idg::UVW<float>* uvw,
-    const float* wavenumbers, idg::float2* visibilities, const float* weights,
-    const idg::float2* aterms, const idg::float2* aterm_derivatives,
-    const int* aterms_indices, const idg::Metadata* metadata,
-    const idg::float2* subgrid, const idg::float2* phasors,
-    const float* parameter_vector) {
-  std::cout << __func__ << std::endl;
-}
-
-void kernel_calibrate_hessian_vector_product2() {
-  std::cout << __func__ << std::endl;
-}
-
-void kernel_phasor(const int nr_subgrids, const int grid_size,
+void kernel_phasor(const int nr_subgrids, const long grid_size,
                    const int subgrid_size, const float image_size,
                    const float w_step_in_lambda,
                    const float* __restrict__ shift, const int max_nr_timesteps,
                    const int nr_channels, const idg::UVW<float>* uvw,
                    const float* wavenumbers, const idg::Metadata* metadata,
-                   idg::float2* phasors) {
+                   std::complex<float>* phasors) {
 #if defined(USE_LOOKUP)
   initialize_lookup();
 #endif
@@ -397,5 +374,9 @@ void kernel_phasor(const int nr_subgrids, const int grid_size,
   }      // end #pragma parallel
 }  // end kernel_phasor
 
-}  // end extern "C"
 #endif
+
+}  // end namespace optimized
+}  // end namespace cpu
+}  // end namespace kernel
+}  // end namespace idg

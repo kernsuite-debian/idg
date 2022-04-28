@@ -10,13 +10,12 @@ namespace idg {
 namespace proxy {
 namespace cpu {
 
+/*! CPU implementation, optimized for performance
+ */
 class Optimized : public CPU {
  public:
   // Constructor
-  Optimized(std::vector<std::string> libraries = default_libraries());
-
- private:
-  static std::vector<std::string> default_libraries();
+  Optimized();
 
 };  // class Optimized
 

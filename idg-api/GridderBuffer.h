@@ -53,11 +53,11 @@ class GridderBuffer : public virtual Buffer {
    *  \param antenna2 [in]  antenna1 < antenna2 < nrStations
    *  \param uvwInMeters [in] double[3]: (u, v, w)
    *  \param visibilities [in]
-   * std::complex<float>[NR_CHANNELS][NR_POLARIZATIONS]
+   * std::complex<float>[NR_CHANNELS][NR_CORRELATIONS]
    */
   virtual void grid_visibilities(size_t timeIndex, size_t antenna1,
                                  size_t antenna2, const double* uvwInMeters,
-                                 std::complex<float>* visibilities,
+                                 const std::complex<float>* visibilities,
                                  const float* weights) = 0;
 
  protected:

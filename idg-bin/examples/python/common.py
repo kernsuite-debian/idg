@@ -82,11 +82,12 @@ def gridding(
         p, w_step, shift, cell_size, kernel_size, subgrid_size, frequencies, visibilities,
         uvw, baselines, grid, aterms, aterms_offsets, spheroidal):
     p.gridding(
-        w_step, shift, cell_size, kernel_size, subgrid_size,
-        frequencies, visibilities, uvw, baselines,
-        grid, aterms, aterms_offsets, spheroidal)
+        kernel_size, frequencies, visibilities, uvw, baselines,
+        aterms, aterms_offsets, spheroidal)
+    p.get_final_grid(grid)
     util.plot_grid(grid, scaling='log')
-    p.transform(idg.FourierDomainToImageDomain, grid)
+    p.transform(idg.FourierDomainToImageDomain)
+    p.get_final_grid(grid)
     util.plot_grid(grid)
     #util.plot_grid(grid, pol=0)
 
@@ -97,11 +98,10 @@ def gridding(
 def degridding(
         p, w_step, shift, cell_size, kernel_size, subgrid_size, frequencies, visibilities,
         uvw, baselines, grid, aterms, aterms_offsets, spheroidal):
-    p.transform(idg.ImageDomainToFourierDomain, grid)
+    p.transform(idg.ImageDomainToFourierDomain)
     p.degridding(
-        w_step, shift, cell_size, kernel_size, subgrid_size,
-        frequencies, visibilities, uvw, baselines,
-        grid, aterms, aterms_offsets, spheroidal)
+        kernel_size, frequencies, visibilities, uvw, baselines,
+        aterms, aterms_offsets, spheroidal)
     #util.plot_visibilities(visibilities)
 
 
@@ -123,6 +123,7 @@ def main(proxyname):
     layout_file      = get_layout_file()
     nr_stations      = get_nr_stations()
     nr_baselines     = get_nr_baselines()
+    nr_polarizations = 4 if nr_correlations == 4 else 1
 
     ######################################################################
     # initialize data generator
@@ -138,7 +139,7 @@ def main(proxyname):
     print("maximum grid size: %d" % (grid_size_max))
 
     # Determine the max baseline length for given grid_size
-    max_uv = data.compute_max_uv(grid_size) # m
+    max_uv = data.compute_max_uv(grid_size, nr_channels) # m
     print("longest baseline required: %.2f km" % (max_uv * 1e-3))
 
     # Select only baselines up to max_uv meters long
@@ -152,14 +153,14 @@ def main(proxyname):
     data.print_info()
 
     # Get remaining parameters
-    image_size = round(data.compute_image_size(grid_size), 4)
+    image_size = round(data.compute_image_size(grid_size, nr_channels), 4)
     cell_size  = image_size / grid_size
 
 
     ######################################################################
     # initialize proxy
     ######################################################################
-    p = proxyname(nr_correlations, subgrid_size)
+    p = proxyname()
 
     ######################################################################
     # print parameters
@@ -170,6 +171,7 @@ def main(proxyname):
     print("nr_timesteps          = ", nr_timesteps)
     print("nr_timeslots          = ", nr_timeslots)
     print("nr_correlations       = ", nr_correlations)
+    print("nr_polarizations      = ", nr_polarizations)
     print("subgrid_size          = ", subgrid_size)
     print("grid_size             = ", grid_size)
     print("image_size            = ", image_size)
@@ -183,23 +185,23 @@ def main(proxyname):
     baseline_offset = 0
     time_offset     = 0
 
-    uvw            = numpy.zeros((nr_baselines, nr_timesteps), dtype=idg.uvwtype)
-    frequencies    = numpy.zeros((nr_channels), dtype=idg.frequenciestype)
+    uvw            = numpy.zeros((nr_baselines, nr_timesteps, 3), dtype=numpy.float32)
+    frequencies    = numpy.zeros((nr_channels), dtype=numpy.float32)
     data.get_frequencies(frequencies, nr_channels, image_size, channel_offset)
     data.get_uvw(uvw, nr_baselines, nr_timesteps, baseline_offset, time_offset, integration_time)
 
-    baselines      = util.get_example_baselines(nr_baselines)
-    grid           = p.allocate_grid(nr_correlations, grid_size)
+    baselines      = util.get_example_baselines(nr_stations, nr_baselines)
+    grid           = p.allocate_grid(nr_polarizations, grid_size)
 
     aterms         = util.get_identity_aterms(
-                        nr_timeslots, nr_stations, subgrid_size, nr_correlations)
+                        nr_timeslots, nr_stations, subgrid_size, 4)
     aterms_offsets = util.get_example_aterms_offset(
                         nr_timeslots, nr_timesteps)
     spheroidal     = util.get_identity_spheroidal(subgrid_size)
     visibilities   = util.get_example_visibilities(
                         nr_baselines, nr_timesteps, nr_channels, nr_correlations,
                         image_size, grid_size, uvw, frequencies)
-    shift          = numpy.zeros(3, dtype=float)
+    shift          = numpy.zeros(2, dtype=numpy.float32)
 
     ######################################################################
     # plot data
@@ -217,6 +219,8 @@ def main(proxyname):
     ######################################################################
     # routines
     ######################################################################
+    p.init_cache(subgrid_size, cell_size, w_step, shift)
+
     gridding(
         p, w_step, shift, cell_size, kernel_size, subgrid_size, frequencies, visibilities,
         uvw, baselines, grid, aterms, aterms_offsets, spheroidal)

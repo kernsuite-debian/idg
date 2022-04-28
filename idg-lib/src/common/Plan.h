@@ -18,8 +18,23 @@
 
 namespace idg {
 
+// forward declaration of friend classes
+// The Plan constructors are private
+// only these classes can instantiate a Plan
+namespace proxy {
+class Proxy;
+namespace cpu {
+class CPU;
+}
+namespace hybrid {
+class UnifiedOptimized;
+}
+}  // namespace proxy
+
 class Plan {
  public:
+  enum Mode { FULL_POLARIZATION, STOKES_I_ONLY };
+
   struct Options {
     Options() {}
 
@@ -41,21 +56,26 @@ class Plan {
     // consider only first channel when creating subgrids,
     // add additional subgrids for every subsequent frequencies
     bool simulate_spectral_line = false;
+
+    // Imaging mode
+    Mode mode = Mode::FULL_POLARIZATION;
   };
 
   // Constructors
   Plan(){};
 
+  Plan(Plan&&) = default;
+
   Plan(const int kernel_size, const int subgrid_size, const int grid_size,
-       const float cell_size, const Array1D<float>& frequencies,
-       const Array2D<UVW<float>>& uvw,
+       const float cell_size, const Array1D<float>& shift,
+       const Array1D<float>& frequencies, const Array2D<UVW<float>>& uvw,
        const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
        const Array1D<unsigned int>& aterms_offsets,
        Options options = Options());
 
   Plan(const int kernel_size, const int subgrid_size, const int grid_size,
-       const float cell_size, const Array1D<float>& frequencies,
-       const Array2D<UVW<float>>& uvw,
+       const float cell_size, const Array1D<float>& shift,
+       const Array1D<float>& frequencies, const Array2D<UVW<float>>& uvw,
        const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
        const Array1D<unsigned int>& aterms_offsets, WTiles& wtiles,
        Options options = Options());
@@ -71,6 +91,8 @@ class Plan {
       const Array1D<unsigned int>& aterms_offsets, WTiles& wtiles,
       const Options& options);
 
+  // options
+  const Options get_options() const { return m_options; };
   // total number of subgrids
   int get_nr_subgrids() const;
 
@@ -129,8 +151,7 @@ class Plan {
                       unsigned int* current_nr_baselines) const;
 
   // set visibilities not used by plan to zero
-  void mask_visibilities(
-      Array3D<Visibility<std::complex<float>>>& visibilities) const;
+  void mask_visibilities(Array5D<std::complex<float>>& visibilities) const;
 
   WTileUpdateSet get_wtile_initialize_set() const {
     return m_wtile_initialize_set;
@@ -149,7 +170,17 @@ class Plan {
   static size_t baseline_index(size_t antenna1, size_t antenna2,
                                size_t nr_stations);
 
+  int get_subgrid_size() const { return m_subgrid_size; }
+  float get_w_step() const { return m_w_step; }
+
+  const Array1D<float>& get_shift() const { return m_shift; }
+  float get_cell_size() const { return m_cell_size; }
+
  private:
+  Array1D<float> m_shift{2};
+  int m_subgrid_size;
+  float m_w_step;
+  float m_cell_size;
   std::vector<Metadata> metadata;
   std::vector<int> subgrid_offset;
   std::vector<int> total_nr_timesteps_per_baseline;
@@ -158,6 +189,7 @@ class Plan {
   WTileUpdateSet m_wtile_flush_set;
   std::vector<int> aterm_indices;
   bool use_wtiles;
+  Options m_options;
 };  // class Plan
 
 }  // namespace idg

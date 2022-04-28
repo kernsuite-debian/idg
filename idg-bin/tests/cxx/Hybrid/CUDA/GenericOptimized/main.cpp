@@ -3,10 +3,10 @@
 
 #include "idg-hybrid-cuda.h"
 
-using namespace std;
-
-using ProxyType = idg::proxy::hybrid::GenericOptimized;
-
 #include "../common/common.h"
 
-int main(int argc, char *argv[]) { return compare_to_reference(); }
+int main(int argc, char *argv[]) {
+  idg::proxy::cpu::Optimized proxy1;
+  idg::proxy::hybrid::GenericOptimized proxy2;
+  return compare(proxy1, proxy2);
+}

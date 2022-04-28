@@ -4,6 +4,7 @@
 #include <iostream>
 #include <iomanip>
 #include <cstdint>
+#include <cstdlib>
 #include <omp.h>
 #include <sys/resource.h>
 #include <unistd.h>
@@ -11,12 +12,9 @@
 
 #include "idg-config.h"
 #include "idg-common.h"
-#include "idg-version.h"
 #include "auxiliary.h"
 #include "memory.h"
 #include "PowerSensor.h"
-
-using namespace std;
 
 namespace idg {
 namespace auxiliary {
@@ -35,10 +33,15 @@ uint64_t flops_gridder(uint64_t nr_channels, uint64_t nr_timesteps,
   flops_per_visibility += nr_channels * nr_correlations * 8;  // update
 
   // Number of flops per subgrid
+  uint64_t nr_polarizations_aterm = 4;
   uint64_t flops_per_subgrid = 0;
-  flops_per_subgrid += nr_correlations * 30;  // aterm
-  flops_per_subgrid += nr_correlations * 2;   // spheroidal
-  flops_per_subgrid += 6;                     // shift
+  flops_per_subgrid += nr_polarizations_aterm * 30;  // aterm
+  if (nr_correlations == 4) {
+    flops_per_subgrid += 4 * 2;  // spheroidal
+  } else {
+    flops_per_subgrid += 1 * 2;  // spheroidal
+  }
+  flops_per_subgrid += 6;  // shift
 
   // Total number of flops
   uint64_t flops_total = 0;
@@ -67,8 +70,9 @@ uint64_t bytes_gridder(uint64_t nr_channels, uint64_t nr_timesteps,
 
   // Number of bytes per aterm
   uint64_t bytes_per_aterm = 0;
+  uint64_t nr_polarizations_aterm = 4;
   bytes_per_aterm +=
-      1ULL * 2 * nr_correlations * 2 * sizeof(float);  // read aterm
+      1ULL * 2 * nr_polarizations_aterm * 2 * sizeof(float);  // read aterm
 
   // Number of bytes per spheroidal
   uint64_t bytes_per_spheroidal = 0;
@@ -127,8 +131,6 @@ uint64_t flops_calibrate(uint64_t nr_terms, uint64_t nr_channels,
   return flops_total;
 }
 
-uint64_t bytes_calibrate() { return 0; }
-
 uint64_t flops_fft(uint64_t size, uint64_t batch, uint64_t nr_correlations) {
   // Pseudo number of flops:
   // return 1ULL * 5 * batch * nr_correlations * size * size * log2(size *
@@ -144,8 +146,9 @@ uint64_t bytes_fft(uint64_t size, uint64_t batch, uint64_t nr_correlations) {
 uint64_t flops_adder(uint64_t nr_subgrids, uint64_t subgrid_size,
                      uint64_t nr_correlations) {
   uint64_t flops = 0;
+  int nr_polarizations = nr_correlations == 4 ? 4 : 1;
   flops += 1ULL * nr_subgrids * subgrid_size * subgrid_size * 8;  // shift
-  flops += 1ULL * nr_subgrids * subgrid_size * subgrid_size * nr_correlations *
+  flops += 1ULL * nr_subgrids * subgrid_size * subgrid_size * nr_polarizations *
            2;  // add
   return flops;
 }
@@ -153,29 +156,33 @@ uint64_t flops_adder(uint64_t nr_subgrids, uint64_t subgrid_size,
 uint64_t bytes_adder(uint64_t nr_subgrids, uint64_t subgrid_size,
                      uint64_t nr_correlations) {
   uint64_t bytes = 0;
+  int nr_polarizations = nr_correlations == 4 ? 4 : 1;
   bytes += 1ULL * nr_subgrids * 2 * sizeof(int);  // coordinate
-  bytes += 1ULL * nr_subgrids * subgrid_size * subgrid_size * 2 *
-           sizeof(float);  // grid in
-  bytes += 1ULL * nr_subgrids * subgrid_size * subgrid_size * 2 *
-           sizeof(float);  // subgrid in
-  bytes += 1ULL * nr_subgrids * subgrid_size * subgrid_size * 2 *
-           sizeof(float);  // subgrid out
+  bytes += 1ULL * nr_subgrids * subgrid_size * subgrid_size * nr_polarizations *
+           2 * sizeof(float);  // grid in
+  bytes += 1ULL * nr_subgrids * subgrid_size * subgrid_size * nr_polarizations *
+           2 * sizeof(float);  // subgrid in
+  bytes += 1ULL * nr_subgrids * subgrid_size * subgrid_size * nr_polarizations *
+           2 * sizeof(float);  // subgrid out
   return bytes;
 }
 
-uint64_t flops_splitter(uint64_t nr_subgrids, uint64_t subgrid_size) {
+uint64_t flops_splitter(uint64_t nr_subgrids, uint64_t subgrid_size,
+                        uint64_t nr_correlations) {
   uint64_t flops = 0;
   flops += 1ULL * nr_subgrids * subgrid_size * subgrid_size * 8;  // shift
   return flops;
 }
 
-uint64_t bytes_splitter(uint64_t nr_subgrids, uint64_t subgrid_size) {
+uint64_t bytes_splitter(uint64_t nr_subgrids, uint64_t subgrid_size,
+                        uint64_t nr_correlations) {
   uint64_t bytes = 0;
+  int nr_polarizations = nr_correlations == 4 ? 4 : 1;
   bytes += 1ULL * nr_subgrids * 2 * sizeof(int);  // coordinate
-  bytes += 1ULL * nr_subgrids * subgrid_size * subgrid_size * 2 *
-           sizeof(float);  // grid in
-  bytes += 1ULL * nr_subgrids * subgrid_size * subgrid_size * 2 *
-           sizeof(float);  // subgrid out
+  bytes += 1ULL * nr_subgrids * subgrid_size * subgrid_size * nr_polarizations *
+           2 * sizeof(float);  // grid in
+  bytes += 1ULL * nr_subgrids * subgrid_size * subgrid_size * nr_polarizations *
+           2 * sizeof(float);  // subgrid out
   return bytes;
 }
 
@@ -200,9 +207,10 @@ uint64_t bytes_scaler(uint64_t nr_subgrids, uint64_t subgrid_size,
 */
 uint64_t sizeof_visibilities(unsigned int nr_baselines,
                              unsigned int nr_timesteps,
-                             unsigned int nr_channels) {
-  return 1ULL * nr_baselines * nr_timesteps * nr_channels *
-         sizeof(Visibility<std::complex<float>>);
+                             unsigned int nr_channels,
+                             unsigned int nr_correlations) {
+  return 1ULL * nr_baselines * nr_timesteps * nr_channels * nr_correlations *
+         sizeof(std::complex<float>);
 }
 
 uint64_t sizeof_uvw(unsigned int nr_baselines, unsigned int nr_timesteps) {
@@ -210,7 +218,7 @@ uint64_t sizeof_uvw(unsigned int nr_baselines, unsigned int nr_timesteps) {
 }
 
 uint64_t sizeof_subgrids(unsigned int nr_subgrids, unsigned int subgrid_size,
-                         uint64_t nr_correlations) {
+                         unsigned int nr_correlations) {
   return 1ULL * nr_subgrids * nr_correlations * subgrid_size * subgrid_size *
          sizeof(std::complex<float>);
 }
@@ -295,7 +303,21 @@ std::vector<std::string> split_string(char *string, const char *delimiter) {
   return splits;
 }
 
-std::string get_lib_dir() { return std::string(IDG_INSTALL_DIR) + "/lib"; }
+std::string get_inc_dir() {
+  const char *inc_dir = std::getenv("IDG_INC_DIR");
+  if (inc_dir)
+    return std::string(inc_dir);
+  else
+    return std::string(IDG_INSTALL_DIR) + "/include";
+}
+
+std::string get_lib_dir() {
+  const char *lib_dir = std::getenv("IDG_LIB_DIR");
+  if (lib_dir)
+    return std::string(lib_dir);
+  else
+    return std::string(IDG_INSTALL_DIR) + "/lib";
+}
 
 size_t get_total_memory() {
   auto pages = sysconf(_SC_PHYS_PAGES);
@@ -319,21 +341,24 @@ size_t get_nr_threads() {
 }
 
 void print_version() {
-  cout << "IDG version ";
-  if (!string(GIT_TAG).empty()) {
-    cout << " " << GIT_TAG << ":";
+  std::cout << "IDG version " << IDG_VERSION;
+  if (!std::string(IDG_GIT_BRANCH).empty()) {
+    std::cout << " branch:" << IDG_GIT_BRANCH;
   }
-  cout << GIT_BRANCH << ":" << GIT_REV << endl;
+  if (!std::string(IDG_GIT_REV).empty()) {
+    std::cout << " rev:" << IDG_GIT_REV;
+  }
+  std::cout << '\n';
 }
 
-DefaultMemory::DefaultMemory(size_t bytes) : Memory(malloc(bytes)) {}
+DefaultMemory::DefaultMemory(size_t size) : Memory(malloc(size), size) {}
 
-DefaultMemory::~DefaultMemory() { free(get()); };
+DefaultMemory::~DefaultMemory() { free(data()); };
 
-AlignedMemory::AlignedMemory(size_t bytes)
-    : Memory(allocate_memory<char>(bytes, m_alignment)) {}
+AlignedMemory::AlignedMemory(size_t size)
+    : Memory(allocate_memory<char>(size, alignment_), size) {}
 
-AlignedMemory::~AlignedMemory() { free(get()); };
+AlignedMemory::~AlignedMemory() { free(data()); };
 
 }  // namespace auxiliary
 }  // namespace idg

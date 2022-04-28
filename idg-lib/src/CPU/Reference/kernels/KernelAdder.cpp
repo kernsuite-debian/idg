@@ -7,15 +7,21 @@
 #include <stdlib.h>
 #include <stdint.h>
 
-#include "Types.h"
-#include "Index.h"
+#include "common/Types.h"
+#include "common/Index.h"
 
-extern "C" {
-void kernel_adder(const long nr_subgrids, const long grid_size,
-                  const int subgrid_size, const idg::Metadata* metadata,
-                  const idg::float2* subgrid, idg::float2* grid) {
+namespace idg {
+namespace kernel {
+namespace cpu {
+namespace reference {
+
+void kernel_adder(const long nr_subgrids, const int nr_polarizations,
+                  const long grid_size, const int subgrid_size,
+                  const idg::Metadata* metadata,
+                  const std::complex<float>* subgrid,
+                  std::complex<float>* grid) {
 #pragma omp parallel for
-  for (int pol = 0; pol < NR_POLARIZATIONS; pol++) {
+  for (int pol = 0; pol < nr_polarizations; pol++) {
     for (int s = 0; s < nr_subgrids; s++) {
       // Load subgrid coordinates
       int subgrid_x = metadata[s].coordinate.x;
@@ -31,8 +37,8 @@ void kernel_adder(const long nr_subgrids, const long grid_size,
       }
 
       // Determine polarization index
-      const int index_pol_default[NR_POLARIZATIONS] = {0, 1, 2, 3};
-      const int index_pol_transposed[NR_POLARIZATIONS] = {0, 2, 1, 3};
+      const int index_pol_default[nr_polarizations] = {0, 1, 2, 3};
+      const int index_pol_transposed[nr_polarizations] = {0, 2, 1, 3};
       int* index_pol =
           (int*)(negative_w ? index_pol_default : index_pol_transposed);
 
@@ -51,14 +57,14 @@ void kernel_adder(const long nr_subgrids, const long grid_size,
 
             // Compute phasor
             float phase = M_PI * (x + y - subgrid_size) / subgrid_size;
-            idg::float2 phasor = {cosf(phase), sinf(phase)};
+            std::complex<float> phasor = {cosf(phase), sinf(phase)};
 
             // Add subgrid value to grid
             int pol_dst = index_pol[pol];
-            long dst_idx = index_grid(grid_size, pol, y_dst, x_dst);
-            long src_idx =
-                index_subgrid(subgrid_size, s, pol_dst, y_src, x_src);
-            idg::float2 value = phasor * subgrid[src_idx];
+            long dst_idx = index_grid_3d(grid_size, pol, y_dst, x_dst);
+            long src_idx = index_subgrid(nr_polarizations, subgrid_size, s,
+                                         pol_dst, y_src, x_src);
+            std::complex<float> value = phasor * subgrid[src_idx];
             value = negative_w ? conj(value) : value;
             grid[dst_idx] += value;
           }
@@ -67,4 +73,8 @@ void kernel_adder(const long nr_subgrids, const long grid_size,
     }
   }
 }
-}
+
+}  // end namespace reference
+}  // end namespace cpu
+}  // end namespace kernel
+}  // end namespace idg

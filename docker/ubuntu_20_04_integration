@@ -1,7 +1,9 @@
 FROM ubuntu:20.04
 
-# Set the git tags at which dependencies are checked out
-ENV EVERYBEAM_VERSION_TAG="v0.1.0"
+# Use specific versions of aoflagger and everybeam. When changing the version,
+# this docker file changes and CI will update the docker image.
+ENV AOFLAGGER_VERSION_TAG 71ab10cd15d04dd3997cd5d12bfe0655f013a907
+ENV EVERYBEAM_VERSION_TAG 82139905041689cf3669cf89c012515e09514628
 
 RUN export DEBIAN_FRONTEND=noninteractive && apt-get update && \
     apt-get install -y \
@@ -14,18 +16,22 @@ RUN export DEBIAN_FRONTEND=noninteractive && apt-get update && \
     libgtkmm-3.0-dev git libfftw3-dev \
     gfortran flex bison wcslib-dev \
     libboost-numpy-dev liblua5.3-dev \
-    casacore-dev casacore-tools pybind11-dev \    
+    casacore-dev casacore-tools pybind11-dev \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* \
 # Build aoflagger3
     && mkdir /aoflagger && cd /aoflagger \
     && git clone https://gitlab.com/aroffringa/aoflagger.git src \
+    && (cd src && git checkout $AOFLAGGER_VERSION_TAG) \
     && mkdir build && cd build \
     && cmake -DCMAKE_INSTALL_PREFIX=/usr ../src && make install -j4 \
     && cd / && rm -rf aoflagger \
-# Build everybeam, checked-out at tag given by $EVERYBEAM_VERSION_TAG
-    && mkdir /everybeam && cd /everybeam && git clone https://git.astron.nl/RD/EveryBeam.git src \
-    && cd src/ && git checkout ${EVERYBEAM_VERSION_TAG} && cd .. \
+# Build everybeam
+    && mkdir /everybeam && cd /everybeam \
+    && git clone https://git.astron.nl/RD/EveryBeam.git src \
+    && (cd src && git checkout $EVERYBEAM_VERSION_TAG) \
     && mkdir build && cd build \
-    && cmake -DCMAKE_INSTALL_PREFIX=/usr ../src -DPYTHON_EXECUTABLE=/usr/bin/python3 \
+    && cmake -DCMAKE_INSTALL_PREFIX=/usr -DBUILD_WITH_PYTHON=ON ../src -DPYTHON_EXECUTABLE=/usr/bin/python3 \
     && make install -j4 \
     && cd / && rm -rf everybeam \
 # Install WSRT Measures (extra casacore data, for integration tests)
@@ -35,6 +41,10 @@ RUN export DEBIAN_FRONTEND=noninteractive && apt-get update && \
     && cd /var/lib/casacore/data \
     && tar xfz /WSRT_Measures.ztar \
     && rm /WSRT_Measures.ztar \
-# Install some python packages
-    && pip3 install astropy scipy
-
+    # Make sure h5py is build against the installed hdf5 library
+    # This is important when h5py is imported in embedded python code
+    # and the main executable is also linked against the hdf5 library.
+    # This happens for example when DPPP is running a PythonDPStep that is
+    # importing h5py
+    && python3 -m pip install h5py --user --no-binary=h5py --force-reinstall --no-deps \
+    && python3 -m pip install pytest pytest-lazy-fixture astropy scipy matplotlib

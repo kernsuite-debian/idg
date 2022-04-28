@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <algorithm>
+#include <cstdlib>
 #include <random>
 
 #include "uvwsim.h"
@@ -21,13 +22,21 @@ Data::Data(std::string layout_file) {
   set_baselines(m_station_coordinates);
 }
 
-void Data::set_station_coordinates(std::string layout_file = "SKA1_low_ecef") {
-  // Check whether layout file exists
-  std::string filename = std::string(IDG_DATA_DIR) + "/" + layout_file;
-  if (!uvwsim_file_exists(filename.c_str())) {
-    std::cerr << "Failed to find specified layout file: " << filename
-              << std::endl;
-    exit(EXIT_FAILURE);
+void Data::set_station_coordinates(const std::string& layout_file) {
+  // Set the filename of the layout file
+  std::string filename;
+
+  // Check whether layout_file is a valid path
+  if (uvwsim_file_exists(layout_file.c_str())) {
+    filename = layout_file;
+  } else {
+    // Try to find the layout file in the IDG_DATA_DIR prefix
+    filename = std::string(IDG_DATA_DIR) + "/" + layout_file;
+    if (!uvwsim_file_exists(filename.c_str())) {
+      std::cerr << "Failed to find specified layout file: " << filename
+                << std::endl;
+      exit(EXIT_FAILURE);
+    }
   }
 
   // Get number of stations
@@ -70,26 +79,30 @@ void Data::print_info() {
             << std::endl;
 }
 
-float Data::compute_image_size(unsigned long grid_size) {
+float Data::compute_image_size(unsigned long grid_size,
+                               unsigned int nr_channels) {
   // the origin of the grid is at the center, therefore any baseline
   // should fit within half of the diameter of the grid
   grid_size /= (2 * grid_padding);
-  auto max_uv = get_max_uv();
-  return grid_size / max_uv * (SPEED_OF_LIGHT / start_frequency);
+  float max_uv = get_max_uv();
+  float end_frequency = start_frequency + nr_channels * frequency_increment;
+  return grid_size / max_uv * (SPEED_OF_LIGHT / end_frequency);
 }
 
-float Data::compute_max_uv(unsigned long grid_size) {
+float Data::compute_max_uv(unsigned long grid_size, unsigned int nr_channels) {
   float fov_arcsec = fov_deg * 3600;
-  float wavelength = SPEED_OF_LIGHT / start_frequency;
+  float end_frequency = start_frequency + nr_channels * frequency_increment;
+  float wavelength = SPEED_OF_LIGHT / end_frequency;
   float res_arcsec = fov_arcsec / grid_size;
   float max_uv = (180 * 3600) * weight * wavelength / (M_PI * res_arcsec);
   return max_uv;
 }
 
-unsigned int Data::compute_grid_size() {
+unsigned int Data::compute_grid_size(unsigned int nr_channels) {
   float max_uv = get_max_uv();
   float fov_arcsec = fov_deg * 3600;
-  float wavelength = SPEED_OF_LIGHT / start_frequency;
+  float end_frequency = start_frequency + nr_channels * frequency_increment;
+  float wavelength = SPEED_OF_LIGHT / end_frequency;
   float res_arcsec = ((180 * 3600) * weight * wavelength / M_PI) / max_uv;
   unsigned int grid_size = fov_arcsec / res_arcsec;
   grid_size *= grid_padding;
@@ -98,8 +111,6 @@ unsigned int Data::compute_grid_size() {
 
 void Data::set_baselines(std::vector<StationCoordinate>& station_coordinates) {
   unsigned int nr_stations = station_coordinates.size();
-  printf("nr_stations = %d, nr_baselines = %lu\n", nr_stations,
-         m_baselines.size());
 
   // Set baselines from station pairs
   for (unsigned station1 = 0; station1 < nr_stations; station1++) {
