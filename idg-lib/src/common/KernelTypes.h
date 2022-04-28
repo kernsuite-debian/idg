@@ -1,7 +1,8 @@
 // Copyright (C) 2020 ASTRON (Netherlands Institute for Radio Astronomy)
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-#define NR_CORRELATIONS 4
+#ifndef IDG_KERNELTYPES_H_
+#define IDG_KERNELTYPES_H_
 
 typedef struct {
   int x, y, z;
@@ -23,9 +24,19 @@ typedef struct {
   int nr_aterms;
 } Metadata;
 
+#ifndef __OPENCL_VERSION__
 template <class T>
 struct UVW {
   T u;
   T v;
   T w;
 };
+#else
+typedef struct {
+  float u;
+  float v;
+  float w;
+} UVW;
+#endif
+
+#endif  // IDG_KERNELTYPES_H_

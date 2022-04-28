@@ -1,0 +1,115 @@
+# Copyright (C) 2021 ASTRON (Netherlands Institute for Radio Astronomy)
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# This file contains the pipelines that run on the Astron repository of IDG,
+# which is at https://git.astron.nl/RD/idg
+
+include: .gitlab-ci.common.yml
+
+# See the idg-integration-docker job in .gitlab-ci.common.yml for notes about
+# integration test jobs.
+test-integration-das:
+  stage: test
+  needs: []
+  allow_failure: true
+  tags:
+    - das6
+  before_script:
+    - source scripts/load_modules_das6.sh
+    - python3 -m pip install --user pytest-lazy-fixture
+    - mkdir build && cd build
+    # Build with GPU libs
+    - cmake -DBUILD_LIB_CUDA=On -DBUILD_TESTING=On -DCMAKE_BUILD_TYPE=Release -DWRITE_OUT_SCALAR_BEAM=ON -DBUILD_WITH_PYTHON=ON -DCMAKE_INSTALL_PREFIX=.. ..
+    - make install -j`nproc`
+    # Install WSclean (needs libgsl)
+    - cd $CI_PROJECT_DIR
+    - mkdir wsclean && cd wsclean
+    - git clone https://gitlab.com/aroffringa/wsclean.git src
+    - mkdir build && cd build
+    - export OPENBLAS_NUM_THREADS=1
+    - cmake -DCFITSIO_ROOT_DIR=${CFITSIO_ROOT} -DCASACORE_ROOT_DIR=${CASACORE_ROOT} -DCMAKE_PREFIX_PATH="${CI_PROJECT_DIR};${EVERYBEAM_ROOT};${FFTW_ROOT}" -DCMAKE_INSTALL_PREFIX=.. ../src
+    - make install -j`nproc`
+    - export PATH=$PATH:$CI_PROJECT_DIR/wsclean/bin
+  script:
+    - cd $CI_PROJECT_DIR/build
+    # Run unit tests (more precisely: the non-integration tests)
+    - ctest -j16 --output-on-failure -LE integration
+    - echo "Finished unit tests"
+    # Run integration tests
+    - ctest --output-on-failure -L integration
+  after_script:
+    # Generate reports folder for storing the junit test reports
+    - mkdir reports
+    # Collect junit xml reports
+    - cd build
+    - XML_FILES="$(find . -name test_*.xml)"
+    - if [ -n "$XML_FILES" ]; then mv $XML_FILES $CI_PROJECT_DIR/reports/; fi
+  artifacts:
+    reports:
+      junit: reports/test_*.xml
+
+test-tuning-das:
+  stage: test
+  needs: []
+  tags:
+    - das6
+  before_script:
+    # Prepare environment to run kernel_tuner
+    - source idg-bin/tuning/load_modules_das6.sh
+    # Install the latest kernel_tuner directly from the repository
+    - python -m pip install --user --upgrade git+https://github.com/benvanwerkhoven/kernel_tuner.git@master
+  script:
+    # There is no need to install IDG, run the tests directly
+    - idg-bin/tuning/tTuneCUDAGridder
+    - idg-bin/tuning/tTuneCUDADegridder
+
+deploy-package:
+  stage: publish
+  needs: ["versioning","build-package"]
+  image: $BASE_IMAGE
+  script:
+    - pip3 install aptly-api-client
+    - chmod -R 700 external/schaap-packaging
+    - cd idg_package
+    - export FILES=$(ls -1 $PWD/*.deb)
+    - echo UPLOADING files $FILES
+    # The following example command must be executed first or else the update will fail because there is no repository
+    # create_repo.py -a amd64 -c testing -d bionic --gpg-key ${GPG_KEY} --gpg-passphrase ${GPG_PASS} schaap
+    - ../external/schaap-packaging/update_repo.py --cleanup -d bionic --gpg-key ${GPG_KEY} --gpg-passphrase ${GPG_PASS} schaap ${FILES}
+  rules:
+    # Only run on master because GPG_KEY and GPG_PASS are protected and therefore only available on protected branches.
+    - if: '$CI_COMMIT_BRANCH != "master"'
+      when: never
+    - if: '$UPLOAD_PACKAGE'
+
+check-stack:
+  stage: test
+  needs: []
+  variables:
+    # Pass commit hash to downstream pipeline
+    IDG_TRIGGER_HASH: $CI_COMMIT_SHA
+  trigger:
+    project: RD/schaap-stack
+    branch: master
+    # This will mirror the status of the downstream pipeline
+    strategy: depend
+  rules:
+    # Only add job for a merge request event
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - when: never
+
+documentation-publish:
+  stage: documentation-publish
+  needs: ["versioning","documentation-build"]
+  image: $BASE_IMAGE
+  before_script:
+    - apt-get install -y openssh-client
+    - eval $(ssh-agent -s)
+    - echo "$SSH_PRIVATE_KEY" | tr -d '\r' | base64 -d | ssh-add -
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    - echo "dop810,195.169.155.206 ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBFCjBBJSbZSFmDGJK8Xlxa2gt/4TUqacQAo1kxWVwMeHqqXP0+HasL9tDYe25Ci7/Ug3roQkwoJBzyuCkN+dtr8=" >> ~/.ssh/known_hosts
+  script:
+    - scp -r build/doc/html/* citt@dop810:IDG
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "master"'

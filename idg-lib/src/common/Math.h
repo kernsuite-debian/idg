@@ -1,6 +1,9 @@
 // Copyright (C) 2020 ASTRON (Netherlands Institute for Radio Astronomy)
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#ifndef IDG_MATH_H_
+#define IDG_MATH_H_
+
 #ifndef FUNCTION_ATTRIBUTES
 #define FUNCTION_ATTRIBUTES
 #endif
@@ -26,21 +29,20 @@ inline float FUNCTION_ATTRIBUTES compute_n(float l, float m) {
  * Calculates n from l, m and the 3 shift parameters.
  * result = 1 - sqrt(1 - lc^2 - mc^2) + pshift
  * with lc = l - lshift, mc = m - mshift
- * @param shift array of size 3 with [lshift, mshift, pshift] parameters
+ * @param shift array of size 2 with [lshift, mshift] parameters
  *        lshift is positive if the rA is larger than the rA at the center.
  *        mshift is positive if the dec is larger than the dec at the center.
  */
 inline float FUNCTION_ATTRIBUTES compute_n(float l, float m,
                                            const float *__restrict__ shift) {
-  const float lc = l - shift[0];
-  const float mc = m - shift[1];
-  const float tmp = (lc * lc) + (mc * mc);
-  return tmp > 1.0 ? 1.0 : tmp / (1.0f + sqrtf(1.0f - tmp)) + shift[2];
+  return compute_n(l - shift[0], m - shift[1]);
 }
+
+#define NR_CORRELATIONS_ATERM 4
 
 template <typename T>
 FUNCTION_ATTRIBUTES inline void apply_avg_aterm_correction(
-    const T C[16], T pixels[NR_POLARIZATIONS]) {
+    const T C[16], T pixels[NR_CORRELATIONS_ATERM]) {
   //        [pixel0
   //         pixel1
   //         pixel2   = vec( [ pixels[0], pixels[1],
@@ -66,7 +68,7 @@ template <typename T>
 inline FUNCTION_ATTRIBUTES void apply_avg_aterm_correction(const T C[16],
                                                            T &uvXX, T &uvXY,
                                                            T &uvYX, T &uvYY) {
-  T uv[NR_POLARIZATIONS] = {uvXX, uvXY, uvYX, uvYY};
+  T uv[NR_CORRELATIONS_ATERM] = {uvXX, uvXY, uvYX, uvYY};
 
   apply_avg_aterm_correction(C, uv);
 
@@ -96,6 +98,18 @@ inline FUNCTION_ATTRIBUTES void conjugate(const T *a, T *b) {
 
   for (unsigned i = 0; i < 8; i++) {
     b_ptr[i] = s[i] * a_ptr[i];
+  }
+}
+
+FUNCTION_ATTRIBUTES inline int next_composite(int n) {
+  n += (n & 1);
+  while (true) {
+    int nn = n;
+    while ((nn % 2) == 0) nn /= 2;
+    while ((nn % 3) == 0) nn /= 3;
+    while ((nn % 5) == 0) nn /= 5;
+    if (nn == 1) return n;
+    n += 2;
   }
 }
 
@@ -144,3 +158,5 @@ inline FUNCTION_ATTRIBUTES void apply_aterm_degridder(T *pixels,
   // Apply aterm: P = P * A2^H
   matmul(temp, aterm2_h, pixels);
 }
+
+#endif  // IDG_MATH_H_

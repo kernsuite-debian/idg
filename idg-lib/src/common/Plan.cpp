@@ -13,32 +13,42 @@ using namespace std;
 namespace idg {
 
 Plan::Plan(const int kernel_size, const int subgrid_size, const int grid_size,
-           const float cell_size, const Array1D<float>& frequencies,
-           const Array2D<UVW<float>>& uvw,
+           const float cell_size, const Array1D<float>& shift,
+           const Array1D<float>& frequencies, const Array2D<UVW<float>>& uvw,
            const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
            const Array1D<unsigned int>& aterms_offsets, Options options)
-    : use_wtiles(false) {
+    : m_subgrid_size(subgrid_size),
+      m_cell_size(cell_size),
+      use_wtiles(false),
+      m_options(options) {
 #if defined(DEBUG)
   cout << "Plan::" << __func__ << endl;
 #endif
 
   WTiles dummy_wtiles;
+  m_shift(0) = shift(0);
+  m_shift(1) = shift(1);
 
   initialize(kernel_size, subgrid_size, grid_size, cell_size, frequencies, uvw,
              baselines, aterms_offsets, dummy_wtiles, options);
 }
 
 Plan::Plan(const int kernel_size, const int subgrid_size, const int grid_size,
-           const float cell_size, const Array1D<float>& frequencies,
-           const Array2D<UVW<float>>& uvw,
+           const float cell_size, const Array1D<float>& shift,
+           const Array1D<float>& frequencies, const Array2D<UVW<float>>& uvw,
            const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
            const Array1D<unsigned int>& aterms_offsets, WTiles& wtiles,
            Options options)
-    : use_wtiles(true) {
+    : m_subgrid_size(subgrid_size),
+      m_cell_size(cell_size),
+      use_wtiles(true),
+      m_options(options) {
 #if defined(DEBUG)
   cout << "Plan::" << __func__ << " (with WTiles)" << endl;
 #endif
 
+  m_shift(0) = shift(0);
+  m_shift(1) = shift(1);
   initialize(kernel_size, subgrid_size, grid_size, cell_size, frequencies, uvw,
              baselines, aterms_offsets, wtiles, options);
 }
@@ -78,7 +88,7 @@ class Subgrid {
     }
 
     int w_index_ = 0;
-    if (w_step) w_index_ = int(std::floor(w_lambda / w_step));
+    if (w_step) w_index_ = int(floorf(w_lambda));
 
     // if this is not the first sample, it should map to the
     // same w_index as the others, if not, return false
@@ -87,15 +97,15 @@ class Subgrid {
     }
 
     // Initialize candidate uv limits
-    float u_min_ = fmin(u_min, u_pixels);
-    float u_max_ = fmax(u_max, u_pixels);
-    float v_min_ = fmin(v_min, v_pixels);
-    float v_max_ = fmax(v_max, v_pixels);
+    float u_min_ = u_min < u_pixels ? u_min : u_pixels;
+    float u_max_ = u_max > u_pixels ? u_max : u_pixels;
+    float v_min_ = v_min < v_pixels ? v_min : v_pixels;
+    float v_max_ = v_max > v_pixels ? v_max : v_pixels;
 
     // Compute candidate uv width
     float u_width_ = u_max_ - u_min_;
     float v_width_ = v_max_ - v_min_;
-    float uv_width_ = fmax(u_width_, v_width_);
+    float uv_width_ = u_width_ > v_width_ ? u_width_ : v_width_;
 
     // Return false if the visibility does not fit
     if ((uv_width_ + kernel_size) >= subgrid_size) {
@@ -131,8 +141,8 @@ class Subgrid {
     int u_pixels = roundf((u_max + u_min) / 2);
     int v_pixels = roundf((v_max + v_min) / 2);
 
-    int wtile_x = floor(double(u_pixels) / wtile_size);
-    int wtile_y = floor(double(v_pixels) / wtile_size);
+    int wtile_x = floorf(float(u_pixels) / wtile_size);
+    int wtile_y = floorf(float(v_pixels) / wtile_size);
 
     // Shift center from middle of grid to top left
     u_pixels += (grid_size / 2);
@@ -240,13 +250,6 @@ void Plan::initialize(
   std::clog << "grid_size    : " << grid_size << std::endl;
 #endif
 
-  // Get options
-  float w_step = options.w_step;
-  int nr_w_layers = options.nr_w_layers;
-  int max_nr_timesteps_per_subgrid = options.max_nr_timesteps_per_subgrid;
-  int max_nr_channels_per_subgrid = options.max_nr_channels_per_subgrid;
-  bool plan_strict = options.plan_strict;
-
   // Check arguments
   assert(baselines.get_x_dim() == uvw.get_y_dim());
 
@@ -258,6 +261,14 @@ void Plan::initialize(
   auto image_size = cell_size * grid_size;  // TODO: remove
   auto wtile_size = wtiles.get_wtile_size();
 
+  // Get options
+  m_w_step = options.w_step;
+  int nr_w_layers = options.nr_w_layers;
+  int max_nr_timesteps_per_subgrid =
+      min(options.max_nr_timesteps_per_subgrid, nr_timesteps);
+  int max_nr_channels_per_subgrid = options.max_nr_channels_per_subgrid;
+  bool plan_strict = options.plan_strict;
+
   // Spectral-line imaging
   bool simulate_spectral_line = options.simulate_spectral_line;
   auto nr_channels_ = nr_channels;
@@ -265,11 +276,16 @@ void Plan::initialize(
     nr_channels = 1;
   }
 
-  // Allocate metadata
-  metadata.reserve(nr_baselines);
-
   // Temporary metadata vector for individual baselines
-  std::vector<Metadata> metadata_[nr_baselines];
+  int max_nr_subgrids_per_baseline =
+      max_nr_timesteps_per_subgrid > 0
+          ? (nr_timesteps / max_nr_timesteps_per_subgrid) + 1
+          : nr_timesteps;
+  idg::Array2D<Metadata> metadata_(nr_baselines,
+                                   nr_channels * max_nr_subgrids_per_baseline);
+
+  // Count the actual number of subgrids per baseline
+  std::vector<unsigned int> nr_subgrids_per_baseline(nr_baselines);
 
 // Iterate all baselines
 #pragma omp parallel for
@@ -310,7 +326,6 @@ void Plan::initialize(
     // Compute uv coordinates in pixels
     struct DataPoint {
       unsigned timestep;
-      unsigned channel;
       float u_pixels;
       float v_pixels;
       float w_lambda;
@@ -324,8 +339,16 @@ void Plan::initialize(
       auto channel_end = channel_group.second;
 
       // Initialize subgrid
-      Subgrid subgrid(kernel_size, subgrid_size, grid_size, w_step, nr_w_layers,
-                      wtile_size);
+      Subgrid subgrid(kernel_size, subgrid_size, grid_size, m_w_step,
+                      nr_w_layers, wtile_size);
+
+      // Constants over nr_timesteps
+      const double speed_of_light = 299792458.0;
+      const float frequency_begin = frequencies(channel_begin);
+      const float frequency_end = frequencies(channel_end - 1);
+      const float scale_begin = frequency_begin / speed_of_light;
+      const float scale_end = frequency_end / speed_of_light;
+      const float scale_w = 1.0f / m_w_step;
 
       for (unsigned t = 0; t < nr_timesteps; t++) {
         // U,V in meters
@@ -333,17 +356,19 @@ void Plan::initialize(
         float v_meters = uvw(bl, t).v;
         float w_meters = uvw(bl, t).w;
 
-        for (unsigned c = 0; c < 2; c++) {
-          unsigned int channel = c == 0 ? channel_begin : channel_end - 1;
-          float u_pixels =
-              meters_to_pixels(u_meters, image_size, frequencies(channel));
-          float v_pixels =
-              meters_to_pixels(v_meters, image_size, frequencies(channel));
-          float w_lambda = meters_to_lambda(w_meters, frequencies(channel));
+        // U,V,W for first channel
+        float u_pixels_begin = u_meters * image_size * scale_begin;
+        float v_pixels_begin = v_meters * image_size * scale_begin;
+        float w_lambda_begin = w_meters * scale_begin * scale_w;
 
-          datapoints(t, c) = {t, c, u_pixels, v_pixels, w_lambda};
-        }  // end for channel
-      }    // end for time
+        // U,V,W for last channel
+        float u_pixels_end = u_meters * image_size * scale_end;
+        float v_pixels_end = v_meters * image_size * scale_end;
+        float w_lambda_end = 0;  // not used
+
+        datapoints(t, 0) = {t, u_pixels_begin, v_pixels_begin, w_lambda_begin};
+        datapoints(t, 1) = {t, u_pixels_end, v_pixels_end, w_lambda_end};
+      }  // end for time
 
       unsigned int time_offset = time_offset0;
       while (time_offset < nr_timesteps) {
@@ -421,19 +446,23 @@ void Plan::initialize(
               .nr_aterms = -1     // nr of aterms, to be filled in later
           };
 
-          metadata_[bl].push_back(m);
+          unsigned subgrid_idx = nr_subgrids_per_baseline[bl];
+          metadata_(bl, subgrid_idx++) = m;
 
           // Add additional subgrids for subsequent frequencies
           if (simulate_spectral_line) {
             for (unsigned c = 1; c < nr_channels_; c++) {
               // Compute shifted subgrid for current frequency
               float shift = frequencies(c) / frequencies(0);
-              Metadata m = metadata_[bl].back();
+              Metadata m = metadata_(bl, subgrid_idx);
               m.coordinate.x *= shift;
               m.coordinate.y *= shift;
-              metadata_[bl].push_back(m);
+              metadata_(bl, subgrid_idx++) = m;
             }
           }
+
+          // Update number of subgrids
+          nr_subgrids_per_baseline[bl] = subgrid_idx;
         } else if (plan_strict) {
 #pragma omp critical
           {
@@ -450,24 +479,34 @@ void Plan::initialize(
     }    // end for channel_groups
   }      // end for bl
 
+  // Find the total number of subgrids for all baselines
+  int total_nr_subgrids = std::accumulate(nr_subgrids_per_baseline.begin(),
+                                          nr_subgrids_per_baseline.end(), 0);
+
+  // Allocate member variables
+  metadata.resize(total_nr_subgrids);
+  total_nr_timesteps_per_baseline.resize(nr_baselines);
+  total_nr_visibilities_per_baseline.resize(nr_baselines);
+  subgrid_offset.resize(nr_baselines);
+
   // Combine data structures
+  unsigned subgrid_index = 0;
   for (unsigned bl = 0; bl < nr_baselines; bl++) {
     // The subgrid offset is the number of subgrids for all prior baselines
-    subgrid_offset.push_back(metadata.size());
+    subgrid_offset[bl] = subgrid_index;
 
     // Count total number of timesteps for baseline
     int total_nr_timesteps = 0;
 
-    for (unsigned i = 0; i < metadata_[bl].size(); i++) {
-      Metadata& m = metadata_[bl][i];
-      int subgrid_index = metadata.size();
+    for (unsigned int i = 0; i < nr_subgrids_per_baseline[bl]; i++) {
+      Metadata& m = metadata_(bl, i);
 
       // Set wtile_index
       Coordinate& wtile_coordinate = m.wtile_coordinate;
       m.wtile_index = wtiles.add_subgrid(subgrid_index, wtile_coordinate);
 
       // Append subgrid
-      metadata.push_back(metadata_[bl][i]);
+      metadata[subgrid_index++] = m;
 
       // Accumulate timesteps, taking only the
       // first channel group into account
@@ -477,19 +516,22 @@ void Plan::initialize(
     }
 
     // Set total total number of timesteps for baseline
-    total_nr_timesteps_per_baseline.push_back(total_nr_timesteps);
+    total_nr_timesteps_per_baseline[bl] = total_nr_timesteps;
 
     // Either all or no channels of a timestep are gridded
     // onto a subgrid, hence total_nr_timesteps * nr_channels
     int total_nr_visibilities = total_nr_timesteps * nr_channels;
-    total_nr_visibilities_per_baseline.push_back(total_nr_visibilities);
+    total_nr_visibilities_per_baseline[bl] = total_nr_visibilities;
   }  // end for bl
 
   // Reserve aterm indices
-  aterm_indices.reserve(nr_baselines * nr_timesteps);
+  aterm_indices.resize(nr_baselines * nr_timesteps);
 
-  // Set aterm index for every timestep
+// Set aterm index for every timestep
+#pragma omp parallel for
   for (unsigned bl = 0; bl < nr_baselines; bl++) {
+    unsigned time_idx = 0;
+
     for (unsigned timeslot = 0; timeslot < nr_timeslots; timeslot++) {
       // Get aterm offset
       const unsigned current_aterms_offset = aterms_offsets(timeslot);
@@ -504,13 +546,15 @@ void Plan::initialize(
 
       for (unsigned timestep = 0; timestep < nr_timesteps_per_aterm;
            timestep++) {
-        aterm_indices.push_back(aterm_index);
+        aterm_indices[bl * nr_timesteps + time_idx++] = aterm_index;
       }
     }
   }
 
   // Set nr_aterms
-  for (Metadata& m : metadata) {
+#pragma omp parallel for
+  for (unsigned i = 0; i < metadata.size(); i++) {
+    auto& m = metadata[i];
     auto aterm_index = aterm_indices[m.time_index];
     auto nr_aterms = 1;
     for (auto time = 0; time < m.nr_timesteps; time++) {
@@ -531,7 +575,6 @@ void Plan::initialize(
   m_wtile_flush_set = wtiles.get_flush_set();
 
 #if defined(DEBUG)
-  cout << "Plan::" << __func__ << endl;
   std::clog << "nr_baselines    : " << nr_baselines << " (input)" << std::endl;
   std::clog << "nr_timesteps    : " << nr_timesteps << " (per baseline)"
             << std::endl;
@@ -584,12 +627,14 @@ int Plan::get_nr_timesteps(int baseline) const {
 }
 
 int Plan::get_nr_timesteps(int baseline, int n) const {
+  assert(n <= int(total_nr_timesteps_per_baseline.size()) - baseline);
   auto begin = next(total_nr_timesteps_per_baseline.begin(), baseline);
   auto end = next(begin, n);
   return accumulate(begin, end, 0);
 }
 
 int Plan::get_max_nr_timesteps_subgrid() const {
+  if (!metadata.size()) return 0;
   auto max_nr_timesteps = metadata[0].nr_timesteps;
   for (const Metadata& m : metadata) {
     if (m.nr_timesteps > max_nr_timesteps) {
@@ -645,7 +690,7 @@ void Plan::initialize_job(const unsigned int nr_baselines,
   auto last_bl = bl + current_nr_baselines;
 
   // Skip empty baselines
-  while (get_nr_timesteps(first_bl, 1) == 0 && first_bl < last_bl) {
+  while (first_bl < last_bl && get_nr_timesteps(first_bl, 1) == 0) {
     first_bl++;
   }
 
@@ -655,15 +700,15 @@ void Plan::initialize_job(const unsigned int nr_baselines,
   (*current_nr_baselines_) = last_bl - first_bl;
 }
 
-void Plan::mask_visibilities(
-    Array3D<Visibility<std::complex<float>>>& visibilities) const {
+void Plan::mask_visibilities(Array5D<std::complex<float>>& visibilities) const {
   // Get visibilities dimensions
-  auto nr_baselines = visibilities.get_z_dim();
-  auto nr_timesteps = visibilities.get_y_dim();
-  auto nr_channels = visibilities.get_x_dim();
+  auto nr_baselines = visibilities.get_d_dim();
+  auto nr_timesteps = visibilities.get_c_dim();
+  auto nr_channels = visibilities.get_b_dim();
+  auto nr_correlations = visibilities.get_a_dim();
 
   // The visibility mask is zero
-  const Visibility<std::complex<float>> zero = {0.0f, 0.0f, 0.0f, 0.0f};
+  const std::complex<float> zero = {0.0f, 0.0f};
 
   // Sanity check
   assert((unsigned)get_nr_baselines() == nr_baselines);
@@ -691,7 +736,9 @@ void Plan::mask_visibilities(
     // Mask all selected visibilities for all channels
     for (unsigned t = first; t < last; t++) {
       for (unsigned c = 0; c < nr_channels; c++) {
-        visibilities(0, t, c) = zero;
+        for (unsigned cor = 0; cor < nr_correlations; cor++) {
+          visibilities(0, t, c, cor) = zero;
+        }
       }
     }
   }
@@ -705,5 +752,3 @@ size_t Plan::baseline_index(size_t antenna1, size_t antenna2,
 }
 
 }  // namespace idg
-
-#include "PlanC.h"

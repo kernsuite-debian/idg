@@ -3,21 +3,21 @@
 
 #include "Types.h"
 
-using namespace std;
+using std::ostream;
 
 namespace idg {
 
-ostream& operator<<(ostream& out, Baseline& b) {
+ostream& operator<<(ostream& out, const Baseline& b) {
   out << "(" << b.station1 << "," << b.station2 << ")";
   return out;
 }
 
-ostream& operator<<(ostream& out, Coordinate& c) {
+ostream& operator<<(ostream& out, const Coordinate& c) {
   out << "(" << c.x << "," << c.y << ")";
   return out;
 }
 
-ostream& operator<<(ostream& out, Metadata& m) {
+ostream& operator<<(ostream& out, const Metadata& m) {
   out << "["
       << "time_index = " << m.time_index << ", "
       << "nr_timesteps = " << m.nr_timesteps << ", "
@@ -25,24 +25,16 @@ ostream& operator<<(ostream& out, Metadata& m) {
       << "channel_end = " << m.channel_end << ", "
       << "baseline = " << m.baseline << ", "
       << "coordinate = " << m.coordinate << ", "
+      << "wtile_coordinate = " << m.wtile_coordinate << ", "
+      << "wtile_index = " << m.wtile_index << ", "
       << "nr_aterms = " << m.nr_aterms << "]";
   return out;
 }
 
 template <class T>
-ostream& operator<<(ostream& out, UVW<T>& uvw) {
+ostream& operator<<(ostream& out, const UVW<T>& uvw) {
   out << "(" << uvw.u << "," << uvw.v << "," << uvw.w << ")";
   return out;
-}
-
-ostream& operator<<(ostream& os, const float2& x) {
-  os << "(" << x.real << "," << x.imag << ")";
-  return os;
-}
-
-ostream& operator<<(ostream& os, const double2& x) {
-  os << "(" << x.real << "," << x.imag << ")";
-  return os;
 }
 
 }  // namespace idg

@@ -13,152 +13,155 @@ namespace idg {
 namespace proxy {
 namespace hybrid {
 
+/**
+ * @brief Hybrid Proxy, combines functionality from CPU Optimized and CUDA
+ * Generic proxies
+ *
+ */
 class GenericOptimized : public cuda::CUDA {
  public:
   GenericOptimized();
   ~GenericOptimized();
 
-  virtual bool do_supports_wstack_gridding() {
-    return cpuProxy->do_supports_wstack_gridding();
-  }
-  virtual bool do_supports_wstack_degridding() {
-    return cpuProxy->do_supports_wstack_degridding();
+  virtual bool do_supports_wstacking() {
+    return cpuProxy->do_supports_wstacking();
   }
 
-  virtual bool do_supports_wtiles() override {
-    return cpuProxy->do_supports_wtiles();
+  virtual bool do_supports_wtiling() override {
+    return !m_disable_wtiling &&
+           (!m_disable_wtiling_gpu || cpuProxy->supports_wtiling());
   }
 
-  virtual bool supports_avg_aterm_correction() { return true; }
+  void set_disable_wtiling(bool v) override {
+    m_disable_wtiling = v;
+    cpuProxy->set_disable_wtiling(v);
+  }
 
-  virtual void set_grid(Grid& grid) override;
-  virtual void set_grid(std::shared_ptr<Grid> grid) override;
-  virtual std::shared_ptr<Grid> get_grid() override;
+  void set_disable_wtiling_gpu(bool v) { m_disable_wtiling_gpu = v; }
 
- private:
-  virtual void do_gridding(
-      const Plan& plan,
-      const float w_step,  // in lambda
-      const Array1D<float>& shift, const float cell_size,
-      const unsigned int kernel_size,  // full width in pixels
-      const unsigned int subgrid_size, const Array1D<float>& frequencies,
-      const Array3D<Visibility<std::complex<float>>>& visibilities,
-      const Array2D<UVW<float>>& uvw,
-      const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
-      Grid& grid, const Array4D<Matrix2x2<std::complex<float>>>& aterms,
-      const Array1D<unsigned int>& aterms_offsets,
-      const Array2D<float>& spheroidal) override;
+  void set_grid(std::shared_ptr<Grid> grid) override;
 
-  virtual void do_degridding(
-      const Plan& plan,
-      const float w_step,  // in lambda
-      const Array1D<float>& shift, const float cell_size,
-      const unsigned int kernel_size,  // full width in pixels
-      const unsigned int subgrid_size, const Array1D<float>& frequencies,
-      Array3D<Visibility<std::complex<float>>>& visibilities,
-      const Array2D<UVW<float>>& uvw,
-      const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
-      const Grid& grid, const Array4D<Matrix2x2<std::complex<float>>>& aterms,
-      const Array1D<unsigned int>& aterms_offsets,
-      const Array2D<float>& spheroidal) override;
+  std::shared_ptr<Grid> get_final_grid() override;
 
-  virtual void do_transform(DomainAtoDomainB direction,
-                            Array3D<std::complex<float>>& grid) override;
+  void init_cache(int subgrid_size, float cell_size, float w_step,
+                  const Array1D<float>& shift) override;
 
-  void run_gridding(
-      const Plan& plan, const float w_step, const Array1D<float>& shift,
-      const float cell_size, const unsigned int kernel_size,
-      const unsigned int subgrid_size, const Array1D<float>& frequencies,
-      const Array3D<Visibility<std::complex<float>>>& visibilities,
-      const Array2D<UVW<float>>& uvw,
-      const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
-      Grid& grid, const Array4D<Matrix2x2<std::complex<float>>>& aterms,
-      const Array1D<unsigned int>& aterms_offsets,
-      const Array2D<float>& spheroidal);
-
-  void run_degridding(
-      const Plan& plan, const float w_step, const Array1D<float>& shift,
-      const float cell_size, const unsigned int kernel_size,
-      const unsigned int subgrid_size, const Array1D<float>& frequencies,
-      Array3D<Visibility<std::complex<float>>>& visibilities,
-      const Array2D<UVW<float>>& uvw,
-      const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
-      const Grid& grid, const Array4D<Matrix2x2<std::complex<float>>>& aterms,
-      const Array1D<unsigned int>& aterms_offsets,
-      const Array2D<float>& spheroidal);
-
-  virtual void do_calibrate_init(
-      std::vector<std::unique_ptr<Plan>>&& plans,
-      float w_step,  // in lambda
-      Array1D<float>&& shift, float cell_size,
-      unsigned int kernel_size,  // full width in pixels
-      unsigned int subgrid_size, const Array1D<float>& frequencies,
-      Array4D<Visibility<std::complex<float>>>&& visibilities,
-      Array4D<Visibility<float>>&& weights, Array3D<UVW<float>>&& uvw,
-      Array2D<std::pair<unsigned int, unsigned int>>&& baselines,
-      const Grid& grid, const Array2D<float>& spheroidal) override;
-
-  virtual void do_calibrate_update(
-      const int station_nr,
-      const Array4D<Matrix2x2<std::complex<float>>>& aterms,
-      const Array4D<Matrix2x2<std::complex<float>>>& derivative_aterms,
-      Array3D<double>& hessian, Array2D<double>& gradient,
-      double& residual) override;
-
-  virtual void do_calibrate_finish() override;
-
-  virtual void do_calibrate_init_hessian_vector_product() override;
-
-  virtual void do_calibrate_update_hessian_vector_product1(
-      const int station_nr,
-      const Array4D<Matrix2x2<std::complex<float>>>& aterms,
-      const Array4D<Matrix2x2<std::complex<float>>>& derivative_aterms,
-      const Array2D<float>& parameter_vector) override;
-
-  virtual void do_calibrate_update_hessian_vector_product2(
-      const int station_nr,
-      const Array4D<Matrix2x2<std::complex<float>>>& aterms,
-      const Array4D<Matrix2x2<std::complex<float>>>& derivative_aterms,
-      Array2D<float>& parameter_vector) override;
-
-  virtual std::unique_ptr<Plan> make_plan(
-      const int kernel_size, const int subgrid_size, const int grid_size,
-      const float cell_size, const Array1D<float>& frequencies,
+  std::unique_ptr<Plan> make_plan(
+      const int kernel_size, const Array1D<float>& frequencies,
       const Array2D<UVW<float>>& uvw,
       const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
       const Array1D<unsigned int>& aterms_offsets,
       Plan::Options options) override;
 
+ private:
+  void run_imaging(
+      const Plan& plan, const Array1D<float>& frequencies,
+      Array4D<std::complex<float>>& visibilities,
+      const Array2D<UVW<float>>& uvw,
+      const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
+      Grid& grid, const Array4D<Matrix2x2<std::complex<float>>>& aterms,
+      const Array1D<unsigned int>& aterms_offsets,
+      const Array2D<float>& spheroidal, ImagingMode mode);
+
+  /*
+   * Gridding
+   */
+  void do_gridding(
+      const Plan& plan, const Array1D<float>& frequencies,
+      const Array4D<std::complex<float>>& visibilities,
+      const Array2D<UVW<float>>& uvw,
+      const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
+      const Array4D<Matrix2x2<std::complex<float>>>& aterms,
+      const Array1D<unsigned int>& aterms_offsets,
+      const Array2D<float>& spheroidal) override;
+
+  void run_gridding(
+      const Plan& plan, const Array1D<float>& frequencies,
+      const Array4D<std::complex<float>>& visibilities,
+      const Array2D<UVW<float>>& uvw,
+      const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
+      Grid& grid, const Array4D<Matrix2x2<std::complex<float>>>& aterms,
+      const Array1D<unsigned int>& aterms_offsets,
+      const Array2D<float>& spheroidal);
+
+  /*
+   * Degridding
+   */
+  void do_degridding(
+      const Plan& plan, const Array1D<float>& frequencies,
+      Array4D<std::complex<float>>& visibilities,
+      const Array2D<UVW<float>>& uvw,
+      const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
+      const Array4D<Matrix2x2<std::complex<float>>>& aterms,
+      const Array1D<unsigned int>& aterms_offsets,
+      const Array2D<float>& spheroidal) override;
+
+  void run_degridding(
+      const Plan& plan, const Array1D<float>& frequencies,
+      Array4D<std::complex<float>>& visibilities,
+      const Array2D<UVW<float>>& uvw,
+      const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
+      const Grid& grid, const Array4D<Matrix2x2<std::complex<float>>>& aterms,
+      const Array1D<unsigned int>& aterms_offsets,
+      const Array2D<float>& spheroidal);
+
+  /*
+   * FFT
+   */
+  void do_transform(DomainAtoDomainB direction) override;
+
+  /*
+   * Calibration
+   */
+  void do_calibrate_init(
+      std::vector<std::vector<std::unique_ptr<Plan>>>&& plans,
+      const Array2D<float>& frequencies,
+      Array6D<std::complex<float>>&& visibilities, Array6D<float>&& weights,
+      Array3D<UVW<float>>&& uvw,
+      Array2D<std::pair<unsigned int, unsigned int>>&& baselines,
+      const Array2D<float>& spheroidal) override;
+
+  void do_calibrate_update(
+      const int station_nr,
+      const Array5D<Matrix2x2<std::complex<float>>>& aterms,
+      const Array5D<Matrix2x2<std::complex<float>>>& derivative_aterms,
+      Array4D<double>& hessian, Array3D<double>& gradient,
+      Array1D<double>& residual) override;
+
+  void do_calibrate_finish() override;
+
  protected:
-  powersensor::PowerSensor* hostPowerSensor;
   idg::proxy::cpu::CPU* cpuProxy;
+
+  /*
+   * W-Tiling state
+   */
+  bool m_disable_wtiling_gpu = false;
 
   /*
    * Calibration state
    */
   struct {
-    std::vector<std::unique_ptr<Plan>> plans;
-    float w_step;  // in lambda
-    Array1D<float> shift;
-    float cell_size;
-    float image_size;
-    unsigned int kernel_size;
-    long unsigned int grid_size;
-    unsigned int subgrid_size;
+    std::vector<std::vector<std::unique_ptr<Plan>>> plans;
+    std::vector<std::vector<Array4D<std::complex<float>>>> subgrids;
+    std::vector<Array1D<float>> wavenumbers;
+    Array6D<std::complex<float>> visibilities;
+    Array6D<float> weights;
+    Array3D<UVW<float>> uvw;
     unsigned int nr_baselines;
     unsigned int nr_timesteps;
-    unsigned int nr_channels;
-    Array3D<UVW<float>> uvw;
-    std::vector<unsigned int> d_sums_ids;
-    unsigned int d_lmnp_id;
-    std::vector<unsigned int> d_metadata_ids;
-    std::vector<unsigned int> d_subgrids_ids;
-    std::vector<unsigned int> d_visibilities_ids;
-    std::vector<unsigned int> d_weights_ids;
-    std::vector<unsigned int> d_uvw_ids;
-    std::vector<unsigned int> d_aterm_idx_ids;
-    Array3D<Visibility<std::complex<float>>>
-        hessian_vector_product_visibilities;
+    unsigned int nr_channels_per_block;
+    unsigned int nr_channel_blocks;
+    std::unique_ptr<cu::DeviceMemory> d_wavenumbers;
+    std::unique_ptr<cu::DeviceMemory> d_lmnp;
+    std::unique_ptr<cu::DeviceMemory> d_sums_x;
+    std::unique_ptr<cu::DeviceMemory> d_sums_y;
+    std::vector<std::unique_ptr<cu::DeviceMemory>> d_metadata;
+    std::vector<std::unique_ptr<cu::DeviceMemory>> d_subgrids;
+    std::vector<std::unique_ptr<cu::DeviceMemory>> d_visibilities;
+    std::vector<std::unique_ptr<cu::DeviceMemory>> d_weights;
+    std::vector<std::unique_ptr<cu::DeviceMemory>> d_uvw;
+    std::vector<std::unique_ptr<cu::DeviceMemory>> d_aterms_indices;
   } m_calibrate_state;
 
   // Note:

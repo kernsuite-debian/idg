@@ -4,45 +4,42 @@
 #include <idg-api.h>
 
 #include <boost/test/unit_test.hpp>
-#include <boost/test/data/test_case.hpp>
+
+#include "gridder-common.h"
 
 namespace {
+
+enum class StokesMode {
+  kStokesIQUV,        // Use full stokes in model image and processing.
+  kStokesI,           // Use stokes I only in model image an processing.
+  kStokesIZeroPadded  // Fill only the Stokes I plane of the model image,
+                      // the others (QUV) are all zeros,
+                      // but do use full stokes in processing
+};
 
 const std::size_t kNrTimesteps = 9;
 const std::size_t kNrStations = 4;
 const std::size_t kNrCorrelations = 4;
+const std::size_t kNrPolarisations = 4;
 const std::vector<std::vector<double>> kBands = {
     {100.e6, 101.e6, 102.e6, 103.e6, 104.e6}};
 const std::size_t kNrBaselines = (kNrStations + 1) * kNrStations / 2;
 const std::size_t kNrRows = kNrTimesteps * kNrBaselines;
 const std::size_t kRowSize = kBands.front().size() * kNrCorrelations;
 const std::complex<float> kDummyData{42.0, -42.0};
-const float kTolerance = 3e-3;  // Maximum difference % between visibilities.
 const float kCellSize = 0.001;  // Pixel size in radians.
 
-enum class WMode { kNeither, kWStacking, kWTiling };
-
-std::ostream& operator<<(std::ostream& stream, WMode wmode) {
-  switch (wmode) {
-    case WMode::kNeither:
-      stream << "No W-Tiling/W-Stacking";
-      break;
-    case WMode::kWStacking:
-      stream << "W-Stacking";
-      break;
-    case WMode::kWTiling:
-      stream << "W-Tiling";
-      break;
-  }
-  return stream;
-}
-
 std::unique_ptr<idg::api::BufferSet> CreateBufferset(
-    idg::api::BufferSetType type, const std::array<int, 2> shift = {0, 0},
-    const WMode wmode = WMode::kNeither) {
+    idg::api::BufferSetType type,
+    idg::api::Type architecture = idg::api::Type::CPU_OPTIMIZED,
+    const std::array<int, 2> shift = {0, 0},
+    const WMode wmode = WMode::kNeither,
+    const StokesMode stokesmode = StokesMode::kStokesIQUV) {
   idg::api::options_type options;
+  AddWModeToOptions(wmode, options);
+  options["stokes_I_only"] = stokesmode == (StokesMode::kStokesI);
   std::unique_ptr<idg::api::BufferSet> bufferset(
-      idg::api::BufferSet::create(idg::api::Type::CPU_OPTIMIZED));
+      idg::api::BufferSet::create(architecture));
 
   unsigned int buffersize = 4000;  // Timesteps per buffer
   float max_baseline = 3000.;      // in meters
@@ -50,8 +47,14 @@ std::unique_ptr<idg::api::BufferSet> CreateBufferset(
   unsigned int imagesize = 256;
   float max_w = 5;
 
-  std::vector<double> image(kNrCorrelations * imagesize * imagesize, 0.0);
+  int nr_polarisations =
+      (stokesmode == StokesMode::kStokesI) ? 1 : kNrPolarisations;
+  int nr_polarisations_model =
+      (stokesmode == StokesMode::kStokesIQUV) ? kNrPolarisations : 1;
 
+  std::vector<double> image(nr_polarisations * imagesize * imagesize, 0.0);
+
+#if 1
   // Create a few very artificial sources.
   for (int x = -6; x <= 6; ++x) {
     for (int y = -4; y <= 4; ++y) {
@@ -61,7 +64,7 @@ std::unique_ptr<idg::api::BufferSet> CreateBufferset(
       std::size_t y2 = 142 + y - shift[1];
       std::size_t x3 = 200 + x - shift[0];
       std::size_t y3 = 200 + y - shift[1];
-      for (int c = 0; c < kNrCorrelations; c++) {
+      for (int c = 0; c < nr_polarisations_model; c++) {
         std::size_t c_offset = c * imagesize * imagesize;
         image[c_offset + imagesize * y1 + x1] += 42 - std::abs(x * y) + c;
         image[c_offset + imagesize * y2 + x2] += 16 + 36 - x * x - y * y + c;
@@ -69,28 +72,16 @@ std::unique_ptr<idg::api::BufferSet> CreateBufferset(
       }
     }
   }
-
+#else  // For debugging: Use a single pixel at the image center.
+  int x = 128 - shift[0];
+  int y = 128 - shift[1];
+  image[imagesize * y + x] = 100;
+#endif
   // By convention l runs in negative direction.
-  const double shift_l = shift[0] * -kCellSize;
-  const double shift_m = shift[1] * kCellSize;
-  const double shift_p =
-      sqrt(1.0 - shift_l * shift_l - shift_m * shift_m) - 1.0;
+  const double shiftl = shift[0] * -kCellSize;
+  const double shiftm = shift[1] * kCellSize;
 
-  switch (wmode) {
-    case WMode::kNeither:
-      options["disable_wtiling"] = true;
-      options["disable_wstacking"] = true;
-      break;
-    case WMode::kWStacking:
-      options["disable_wtiling"] = true;
-      break;
-    case WMode::kWTiling:
-      // Do not disable anything.
-      break;
-  }
-
-  bufferset->init(imagesize, kCellSize, max_w, shift_l, shift_m, shift_p,
-                  options);
+  bufferset->init(imagesize, kCellSize, max_w, shiftl, shiftm, options);
   bufferset->init_buffers(buffersize, kBands, kNrStations, max_baseline,
                           options, type);
   bufferset->set_image(image.data());
@@ -121,7 +112,8 @@ std::pair<std::vector<std::size_t>, std::vector<std::size_t>> CreateAntennas() {
 }
 
 void CompareResults(std::vector<std::complex<float>*>& result1,
-                    std::vector<std::complex<float>*>& result2) {
+                    std::vector<std::complex<float>*>& result2,
+                    const float tolerance) {
   BOOST_REQUIRE_EQUAL(result1.size(), kNrRows);
   BOOST_REQUIRE_EQUAL(result2.size(), kNrRows);
 
@@ -131,8 +123,8 @@ void CompareResults(std::vector<std::complex<float>*>& result1,
     BOOST_REQUIRE(data1);
     BOOST_REQUIRE(data2);
     while (data1 != result1[row] + kRowSize) {
-      BOOST_CHECK_CLOSE(std::abs(*data1), std::abs(*data2), kTolerance);
-      BOOST_CHECK_SMALL(std::arg(*data1) - std::arg(*data2), kTolerance);
+      BOOST_CHECK_CLOSE(std::abs(*data1), std::abs(*data2), tolerance);
+      BOOST_CHECK_SMALL(std::arg(*data1) - std::arg(*data2), tolerance);
       ++data1;
       ++data2;
     }
@@ -140,7 +132,7 @@ void CompareResults(std::vector<std::complex<float>*>& result1,
 }
 
 void CompareResults(const std::complex<float>* ref,
-                    const std::complex<float>* custom,
+                    const std::complex<float>* custom, const float tolerance,
                     const std::size_t time_steps = kNrTimesteps,
                     const std::complex<float> aterm = {1.0}) {
   // IDG applies the aterm for two stations, and uses the complex conjugate
@@ -159,51 +151,8 @@ void CompareResults(const std::complex<float>* ref,
       for (std::size_t st2 = st1 + 1; st2 < kNrStations; ++st2) {
         for (std::size_t i = 0; i < kRowSize; ++i, ++ref, ++custom) {
           std::complex<float> ref_value = *ref * aterm_factor;
-          BOOST_CHECK_CLOSE(std::abs(ref_value), std::abs(*custom), kTolerance);
-          BOOST_CHECK_SMALL(std::arg(ref_value) - std::arg(*custom),
-                            kTolerance);
-        }
-      }
-    }
-  }
-}
-
-/**
- * Apply phase shift angle to a result.
- * @param data Pointer to result visibilities ( kNrRows * kRowSize values ).
- * @param uvw Pointer to uvw values. This function uses the first set
- *        of uvw values for all baselines.
- * @param shift Phase shift, in pixels.
- */
-void ApplyPhaseShift(std::complex<float>* data, const double* uvw,
-                     const std::array<int, 2>& shift) {
-  // By convention l runs in negative direction.
-  const double shift_l = shift[0] * -kCellSize;
-  const double shift_m = shift[1] * kCellSize;
-  const double shift_p =
-      sqrt(1.0 - shift_l * shift_l - shift_m * shift_m) - 1.0;
-
-  // Sign flip of uvw because subgrid coordinates are flipped.
-  // Additional sign flip of u because subgrid l runs in positive direction
-  const double uvw_factors[3] = {1.0, -1.0, -1.0};
-
-  // The angle is: 2*pi * (u*dl + v*dm + w*dp) * (frequency / speed_of_light)
-  // phase_factor contains all parts except the frequency.
-  const double phase_factor =
-      (uvw[0] * uvw_factors[0] * shift_l + uvw[1] * uvw_factors[1] * shift_m +
-       uvw[2] * uvw_factors[2] * shift_p) *
-      (2.0 * M_PI / 299792458.0);
-  for (std::size_t t = 0; t < kNrTimesteps; ++t) {
-    for (std::size_t st1 = 0; st1 < kNrStations; ++st1) {
-      data += kRowSize;  // Do not touch auto-correlations.
-      for (std::size_t st2 = st1 + 1; st2 < kNrStations; ++st2) {
-        for (const double& frequency : kBands.front()) {
-          const double angle = frequency * phase_factor;
-          const std::complex<float> phasor(cos(angle), sin(angle));
-          for (std::size_t corr = 0; corr < kNrCorrelations; ++corr) {
-            *data *= phasor;
-            ++data;
-          }
+          BOOST_CHECK_CLOSE(std::abs(ref_value), std::abs(*custom), tolerance);
+          BOOST_CHECK_SMALL(std::arg(ref_value) - std::arg(*custom), tolerance);
         }
       }
     }
@@ -236,7 +185,7 @@ BOOST_AUTO_TEST_CASE(strategies) {
   // Pointers to result visibilities. Each baseline has one pointer.
   // For _req and _multi, they will point to the internal IDG buffers that
   // compute() returs. For autocorrelations, they will point to dummy values.
-  // For _comp and _uvwf, they will point to *_data buffers in this test that
+  // For _comp, they will point to *_data buffers in this test that
   // are initialized to dummy values. For autocorrelations, IDG should not
   // touch the dummy values, so those rows also have dummy values in the end.
   std::vector<std::complex<float>*> result_req;
@@ -320,8 +269,8 @@ BOOST_AUTO_TEST_CASE(strategies) {
                                 comp_data_ptrs);
 
   // Finally, compare the predictions.
-  CompareResults(result_req, result_multi);
-  CompareResults(result_multi, result_comp);
+  CompareResults(result_req, result_multi, 1e-10);
+  CompareResults(result_multi, result_comp, 1e-10);
 
   dg_req->finished_reading();
   dg_multi->finished_reading();
@@ -392,52 +341,108 @@ BOOST_AUTO_TEST_CASE(custom_factors) {
                                  ptrs_aterm, nullptr, aterms.data(),
                                  aterm_offsets);
 
-  CompareResults(data_ref.data(), data_uvw.data());
+  CompareResults(data_ref.data(), data_uvw.data(), 1e-10);
 
   const std::size_t timestep_size = kNrBaselines * kRowSize;
-  CompareResults(data_ref.data(), data_aterm.data(), 3, aterm_012);
+  CompareResults(data_ref.data(), data_aterm.data(), 1e-10, 3, aterm_012);
   CompareResults(data_ref.data() + timestep_size * 3,
-                 data_aterm.data() + timestep_size * 3, 2, aterm_34);
+                 data_aterm.data() + timestep_size * 3, 2e-5, 2, aterm_34);
   CompareResults(data_ref.data() + timestep_size * 5,
-                 data_aterm.data() + timestep_size * 5, 4, aterm_5678);
+                 data_aterm.data() + timestep_size * 5, 5e-5, 4, aterm_5678);
 }
 
-// TODO: Fix shift in w-tiling and add WMode::kWTiling test.
-BOOST_DATA_TEST_CASE(shift,
-                     boost::unit_test::data::make({WMode::kNeither,
-                                                   WMode::kWStacking}),
-                     wmode) {
+BOOST_AUTO_TEST_CASE(shift) {
+  // This test tests all combinations of architecture and wmode.
+  const std::vector<WMode> kWModes{WMode::kNeither, WMode::kWStacking,
+                                   WMode::kWTiling};
+
   const std::array<int, 2> kShift{10, 20};
 
-  std::unique_ptr<idg::api::BufferSet> bs_ref =
-      CreateBufferset(idg::api::BufferSetType::kBulkDegridding);
-  std::unique_ptr<idg::api::BufferSet> bs_shift =
-      CreateBufferset(idg::api::BufferSetType::kBulkDegridding, kShift, wmode);
-
-  const idg::api::BulkDegridder* dg_ref = bs_ref->get_bulk_degridder(0);
-  const idg::api::BulkDegridder* dg_shift = bs_shift->get_bulk_degridder(0);
-
-  const std::vector<double> uvw = CreateUVW(1.0, 2.0, 3.0);
+  const auto antennas = CreateAntennas();
+  const std::vector<double> uvw = CreateUVW(10.0, 20.0, 3.0);
   const std::vector<const double*> uvws(kNrTimesteps, uvw.data());
 
   std::vector<std::complex<float>> data_ref(kNrRows * kRowSize, kDummyData);
   std::vector<std::complex<float>> data_shift(kNrRows * kRowSize, kDummyData);
   std::vector<std::complex<float>*> ptrs_ref;
   std::vector<std::complex<float>*> ptrs_shift;
-
   for (std::size_t t = 0; t < kNrTimesteps; ++t) {
     ptrs_ref.push_back(data_ref.data() + t * kNrBaselines * kRowSize);
     ptrs_shift.push_back(data_shift.data() + t * kNrBaselines * kRowSize);
   }
 
-  const auto antennas = CreateAntennas();
+  // Create reference output data.
+  std::unique_ptr<idg::api::BufferSet> bs_ref = CreateBufferset(
+      idg::api::BufferSetType::kBulkDegridding, idg::api::Type::CPU_OPTIMIZED);
+  const idg::api::BulkDegridder* dg_ref = bs_ref->get_bulk_degridder(0);
   dg_ref->compute_visibilities(antennas.first, antennas.second, uvws, ptrs_ref);
-  dg_shift->compute_visibilities(antennas.first, antennas.second, uvws,
-                                 ptrs_shift);
+  bs_ref.reset();
 
-  ApplyPhaseShift(data_shift.data(), uvw.data(), kShift);
+  std::set<idg::api::Type> architectures = GetArchitectures();
+  // CUDA Generic produces zeros when degridding
+  // see bug ticket https://jira.skatelescope.org/browse/AST-760
+  architectures.erase(idg::api::Type::CUDA_GENERIC);
 
-  CompareResults(data_ref.data(), data_shift.data());
+  for (idg::api::Type architecture : architectures) {
+    for (WMode wmode : kWModes) {
+      std::unique_ptr<idg::api::BufferSet> bs_shift =
+          CreateBufferset(idg::api::BufferSetType::kBulkDegridding,
+                          architecture, kShift, wmode);
+      const idg::api::BulkDegridder* dg_shift = bs_shift->get_bulk_degridder(0);
+
+      std::fill(data_shift.begin(), data_shift.end(), kDummyData);
+      dg_shift->compute_visibilities(antennas.first, antennas.second, uvws,
+                                     ptrs_shift);
+      float tolerance = 3e-3;
+      CompareResults(data_ref.data(), data_shift.data(), tolerance);
+    }
+  }
+}
+
+BOOST_AUTO_TEST_CASE(stokes_I_only) {
+  // This test tests all architectures
+
+  const std::array<int, 2> kShift{10, 20};
+
+  const auto antennas = CreateAntennas();
+  const std::vector<double> uvw = CreateUVW(10.0, 20.0, 3.0);
+  const std::vector<const double*> uvws(kNrTimesteps, uvw.data());
+
+  std::vector<std::complex<float>> data_ref(kNrRows * kRowSize, kDummyData);
+  std::vector<std::complex<float>> data_test(kNrRows * kRowSize, kDummyData);
+  std::vector<std::complex<float>*> ptrs_ref;
+  std::vector<std::complex<float>*> ptrs_test;
+  for (std::size_t t = 0; t < kNrTimesteps; ++t) {
+    ptrs_ref.push_back(data_ref.data() + t * kNrBaselines * kRowSize);
+    ptrs_test.push_back(data_test.data() + t * kNrBaselines * kRowSize);
+  }
+
+  // Create reference output data.
+  std::unique_ptr<idg::api::BufferSet> bs_ref = CreateBufferset(
+      idg::api::BufferSetType::kBulkDegridding, idg::api::Type::CPU_OPTIMIZED,
+      {0, 0}, WMode::kNeither, StokesMode::kStokesIZeroPadded);
+  const idg::api::BulkDegridder* dg_ref = bs_ref->get_bulk_degridder(0);
+  dg_ref->compute_visibilities(antennas.first, antennas.second, uvws, ptrs_ref);
+  bs_ref.reset();
+  std::set<idg::api::Type> architectures = GetArchitectures();
+
+  // CUDA Generic produces zeros when degridding
+  // see bug ticket https://jira.skatelescope.org/browse/AST-760
+  // This problem is unrelated to Stokes_I_only mode
+  architectures.erase(idg::api::Type::CUDA_GENERIC);
+
+  for (idg::api::Type architecture : architectures) {
+    std::unique_ptr<idg::api::BufferSet> bs_test =
+        CreateBufferset(idg::api::BufferSetType::kBulkDegridding, architecture,
+                        kShift, WMode::kWTiling, StokesMode::kStokesI);
+    const idg::api::BulkDegridder* dg_test = bs_test->get_bulk_degridder(0);
+
+    std::fill(data_test.begin(), data_test.end(), kDummyData);
+    dg_test->compute_visibilities(antennas.first, antennas.second, uvws,
+                                  ptrs_test);
+    float tolerance = 3e-3;
+    CompareResults(data_ref.data(), data_test.data(), tolerance);
+  }
 }
 
 BOOST_AUTO_TEST_CASE(bulk_invalid_arguments) {

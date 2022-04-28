@@ -31,8 +31,7 @@ BufferImpl::BufferImpl(const BufferSetImpl& bufferset, size_t bufferTimesteps)
       m_timeStartNextBatch(bufferTimesteps),
       m_nrStations(0),
       m_nr_baselines(0),
-      m_nrPolarizations(4),
-      m_shift(3),
+      m_shift(2),
       m_default_aterm_offsets(2),
       m_aterm_offsets_array(0),
       m_frequencies(0),
@@ -43,10 +42,10 @@ BufferImpl::BufferImpl(const BufferSetImpl& bufferset, size_t bufferTimesteps)
 #if defined(DEBUG)
   cout << __func__ << endl;
 #endif
-  assert(bufferset.get_grid()->get_x_dim() ==
-         bufferset.get_grid()->get_y_dim());
+  assert(bufferset.get_proxy().get_grid().get_x_dim() ==
+         bufferset.get_proxy().get_grid().get_y_dim());
 
-  assert(bufferset.get_shift().size() == 3);
+  assert(bufferset.get_shift().size() == 2);
   std::copy_n(bufferset.get_shift().data(), m_shift.size(), m_shift.data());
 
   m_default_aterm_offsets[0] = 0;
@@ -70,7 +69,8 @@ void BufferImpl::set_stations(const size_t nrStations) {
 size_t BufferImpl::get_stations() const { return m_nrStations; }
 
 double BufferImpl::get_image_size() const {
-  return m_bufferset.get_cell_size() * m_bufferset.get_grid()->get_y_dim();
+  return m_bufferset.get_cell_size() *
+         m_bufferset.get_proxy().get_grid().get_y_dim();
 }
 
 void BufferImpl::set_frequencies(size_t nr_channels,
@@ -100,8 +100,6 @@ size_t BufferImpl::get_frequencies_size() const {
   return m_frequencies.get_x_dim();
 }
 
-size_t BufferImpl::get_nr_polarizations() const { return m_nrPolarizations; }
-
 // Plan creation and helper functions
 
 void BufferImpl::bake() {
@@ -115,12 +113,12 @@ void BufferImpl::bake() {
 }
 
 void BufferImpl::malloc_buffers() {
+  const int nr_correlations = m_bufferset.get_nr_correlations();
   proxy::Proxy& proxy = m_bufferset.get_proxy();
   m_bufferUVW =
       proxy.allocate_array2d<UVW<float>>(m_nr_baselines, m_bufferTimesteps);
-  m_bufferVisibilities =
-      proxy.allocate_array3d<Visibility<std::complex<float>>>(
-          m_nr_baselines, m_bufferTimesteps, m_nr_channels);
+  m_bufferVisibilities = proxy.allocate_array4d<std::complex<float>>(
+      m_nr_baselines, m_bufferTimesteps, m_nr_channels, nr_correlations);
   m_bufferStationPairs =
       proxy.allocate_array1d<std::pair<unsigned int, unsigned int>>(
           m_nr_baselines);
@@ -152,6 +150,12 @@ void BufferImpl::init_default_aterm() {
 // Set the a-term that starts validity at timeIndex
 void BufferImpl::set_aterm(size_t timeIndex,
                            const std::complex<float>* aterms) {
+#if defined(BUILD_LIB_OPENCL)
+  if (dynamic_cast<proxy::opencl::Generic*>(&m_bufferset.get_proxy())) {
+    throw std::runtime_error("OpenCL kernels do not support Aterms");
+  }
+#endif
+
   const auto* const local_aterms =
       reinterpret_cast<decltype(m_aterms)::const_pointer>(aterms);
   const int local_time = timeIndex - m_timeStartThisBatch;
@@ -169,7 +173,7 @@ void BufferImpl::set_aterm(size_t timeIndex,
               m_aterms.data() + m_aterms.size() - aterm_block_size);
   } else {  // local_time > last_offset
     // Insert new timeIndex before the last element in m_aterm_offsets.
-    assert(local_time < m_bufferTimesteps);
+    assert(local_time <= m_bufferTimesteps);
     m_aterm_offsets.back() = local_time;
     m_aterm_offsets.push_back(m_bufferTimesteps);
     m_aterms.insert(m_aterms.end(), local_aterms,
@@ -203,10 +207,6 @@ double Buffer_get_frequency(idg::api::BufferImpl* p, int channel) {
 
 int Buffer_get_frequencies_size(idg::api::BufferImpl* p) {
   return p->get_frequencies_size();
-}
-
-int Buffer_get_nr_polarizations(idg::api::BufferImpl* p) {
-  return p->get_nr_polarizations();
 }
 
 double Buffer_get_image_size(idg::api::BufferImpl* p) {

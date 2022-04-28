@@ -1,7 +1,7 @@
 # Copyright (C) 2020 ASTRON (Netherlands Institute for Radio Astronomy)
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-from Python import *
+from .Python import *
 
 class Reference(Proxy):
 
@@ -253,7 +253,7 @@ class Reference(Proxy):
                 dtype = idg.atermoffsettype)
         :param spheroidal: numpy.ndarray(
                 shape=(height, width),
-                dtype = idg.spheroidaltype)
+                dtype = idg.tapertype)
         """
         # extract dimensions
         nr_channels = frequencies.shape[0]
@@ -373,7 +373,7 @@ class Reference(Proxy):
                 dtype = idg.atermoffsettype)
         :param spheroidal: numpy.ndarray(
                 shape=(height, width),
-                dtype = idg.spheroidaltype)
+                dtype = idg.tapertype)
         """
         # extract dimensions
         nr_channels = frequencies.shape[0]

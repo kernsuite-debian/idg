@@ -1,0 +1,110 @@
+# Copyright (C) 2021 ASTRON (Netherlands Institute for Radio Astronomy)
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# This file contains the pipelines that run on the SKAO repository of IDG, which
+# is at https://gitlab.com/ska-telescope/sdp/ska-sdp-func-idg
+
+include:
+  - local: .gitlab-ci.common.yml
+# Create Gitlab CI badges from CI metrics
+# https://developer.skao.int/en/latest/tools/continuousintegration.html#automated-collection-of-ci-health-metrics-as-part-of-the-ci-pipeline
+  - project: ska-telescope/templates-repository
+    file: gitlab-ci/includes/post_step.yml
+
+# Caching 'public' allows keeping the 'pages' output of multiple branches / MRs.
+cache:
+  paths:
+    - public
+
+prepare-gpu:
+  extends: .prepare
+  variables:
+    DOCKER_IMAGE: $GPU_IMAGE
+    DOCKER_FILE: ./docker/ubuntu_20_04_gpu
+    DOCKER_BUILD_ARG: --build-arg IDG_VERSION=${IDG_VERSION} --build-arg AUTHOR="$CI_COMMIT_AUTHOR"
+    # Use the same labels as ociBuildImage() in https://gitlab.com/ska-telescope/sdi/ska-cicd-makefile/-/blob/master/.make-oci-support
+    DOCKER_ENV_LABELS: CI_COMMIT_AUTHOR CI_COMMIT_REF_NAME CI_COMMIT_REF_SLUG CI_COMMIT_SHA CI_COMMIT_SHORT_SHA CI_COMMIT_TIMESTAMP CI_JOB_ID CI_JOB_URL CI_PIPELINE_ID CI_PIPELINE_IID CI_PIPELINE_URL CI_PROJECT_ID CI_PROJECT_PATH_SLUG CI_PROJECT_URL CI_RUNNER_ID CI_RUNNER_REVISION CI_RUNNER_TAGS GITLAB_USER_NAME GITLAB_USER_EMAIL GITLAB_USER_LOGIN GITLAB_USER_ID
+  rules:
+    - when: always # Override the 'changes' rule from .prepare
+
+test-gpu:
+  stage: test
+  needs: ["versioning","prepare-gpu"]
+  # This job may fail, since the k8srunner-gpu node is still experimental.
+  allow_failure: true
+  timeout: 10 minutes
+  tags: [k8srunner-gpu]
+  image: $GPU_IMAGE
+  script:
+    - nvidia-smi
+    - cd /idg/bin
+    - for x in test-*; do echo == Running $x ==; ./$x; done
+
+deploy-package:
+  stage: publish
+  # Only deploy if the tests pass
+  needs: ["versioning","prepare-gpu","test-unit","test-integration","test-gpu"]
+  image: $GPU_IMAGE
+  before_script:
+    - apt-get update
+    - apt-get install -y curl
+  script:
+    - cd /idg
+    - |
+      for pkg in idg-*.deb; do
+        out=${pkg//_/-}
+        out=${out/#idg-/${CI_PROJECT_NAME}-}
+        out=${out/%\.deb/-ubuntu20.04.deb}
+        out=${CAR_RAW_REPOSITORY_URL}/${CI_PROJECT_NAME}/$out
+        echo Deploying $pkg to $out...
+        curl -u ${CAR_RAW_USERNAME}:${CAR_RAW_PASSWORD} --upload-file $pkg $out
+      done
+  rules:
+    # Only deploy for the master branch, builds for tags, or when UPLOAD_PACKAGE
+    # is explicitly set.
+    - if: '$CI_COMMIT_BRANCH == "master"'
+    - if: '$CI_COMMIT_TAG'
+    - if: '$UPLOAD_PACKAGE'
+
+deploy-docker:
+  stage: publish
+  # Only deploy if the tests pass
+  needs: ["versioning","test-unit","test-integration","test-gpu"]
+  image: docker:20.10
+  services:
+    - docker:20.10-dind
+  variables:
+    CAR_IMAGE: ${CAR_OCI_REGISTRY_HOST}/${CI_PROJECT_NAME}-cuda:${IDG_VERSION}
+  script:
+    - echo Deploying GPU docker image to ${CAR_IMAGE}
+    - echo ${CI_REGISTRY_PASSWORD} | docker login -u $CI_REGISTRY_USER --password-stdin $CI_REGISTRY
+    - echo ${CAR_OCI_REGISTRY_PASSWORD} | docker login --username ${CAR_OCI_REGISTRY_USERNAME} --password-stdin ${CAR_OCI_REGISTRY_HOST}
+    - |
+      if ! docker manifest inspect $CAR_IMAGE > /dev/null; then
+        docker pull ${GPU_IMAGE}
+        docker tag ${GPU_IMAGE} ${CAR_IMAGE}
+        docker push ${CAR_IMAGE}
+      else
+        echo Skipping deploy, ${CAR_IMAGE} already exists
+      fi
+  rules:
+    # Only deploy for the master branch, builds for tags, or when UPLOAD_PACKAGE
+    # is explicitly set.
+    - if: '$CI_COMMIT_BRANCH == "master"'
+    - if: '$CI_COMMIT_TAG'
+    - if: '$UPLOAD_PACKAGE'
+
+pages:
+  stage: pages
+  needs: ["versioning","test-unit"]
+  image: $BASE_IMAGE
+  script:
+    - echo Deploying GitLab pages to $CI_PAGES_URL/$CI_COMMIT_REF_SLUG
+    - mkdir -p public/$CI_COMMIT_REF_SLUG
+    - cd public/$CI_COMMIT_REF_SLUG
+    - gcovr -j$(($(nproc)/2 > 0 ? $(nproc)/2:1)) -r ../../ -a ../../build/run-unit.json --html-details index.html
+  artifacts:
+    name: $CI_COMMIT_REF_SLUG
+    paths:
+      - public
+    expire_in: 1 week

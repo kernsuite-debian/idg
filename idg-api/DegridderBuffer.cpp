@@ -103,30 +103,27 @@ void DegridderBufferImpl::flush() {
       m_aterms.data(), m_aterm_offsets_array.get_x_dim() - 1, m_nrStations,
       subgridsize, subgridsize);
 
+  proxy::Proxy& proxy = m_bufferset.get_proxy();
+
   // Set Plan options
   Plan::Options options;
-  options.w_step = m_bufferset.get_w_step();
-  options.nr_w_layers = m_bufferset.get_grid()->get_w_dim();
+  options.nr_w_layers = proxy.get_grid().get_w_dim();
   options.plan_strict = false;
-
-  proxy::Proxy& proxy = m_bufferset.get_proxy();
+  options.mode = (m_bufferset.get_nr_polarizations() == 4)
+                     ? Plan::Mode::FULL_POLARIZATION
+                     : Plan::Mode::STOKES_I_ONLY;
 
   // Create plan
   m_bufferset.get_watch(BufferSetImpl::Watch::kPlan).Start();
   std::unique_ptr<Plan> plan =
-      proxy.make_plan(m_bufferset.get_kernel_size(), subgridsize,
-                      m_bufferset.get_grid()->get_x_dim(),
-                      m_bufferset.get_cell_size(), m_frequencies, m_bufferUVW,
+      proxy.make_plan(m_bufferset.get_kernel_size(), m_frequencies, m_bufferUVW,
                       m_bufferStationPairs, m_aterm_offsets_array, options);
   m_bufferset.get_watch(BufferSetImpl::Watch::kPlan).Pause();
 
   // Run degridding
   m_bufferset.get_watch(BufferSetImpl::Watch::kDegridding).Start();
-  proxy.degridding(*plan, m_bufferset.get_w_step(), m_shift,
-                   m_bufferset.get_cell_size(), m_bufferset.get_kernel_size(),
-                   subgridsize, m_frequencies, m_bufferVisibilities,
-                   m_bufferUVW, m_bufferStationPairs, *m_bufferset.get_grid(),
-                   m_aterms_array, m_aterm_offsets_array,
+  proxy.degridding(*plan, m_frequencies, m_bufferVisibilities, m_bufferUVW,
+                   m_bufferStationPairs, m_aterms_array, m_aterm_offsets_array,
                    m_bufferset.get_spheroidal());
   m_bufferset.get_watch(BufferSetImpl::Watch::kDegridding).Pause();
 
@@ -164,6 +161,18 @@ std::vector<std::pair<size_t, std::complex<float>*>>
 DegridderBufferImpl::compute() {
   flush();
   m_buffer_full = false;
+  if (m_bufferset.get_nr_correlations() == 2) {
+    m_bufferVisibilities2.zero();
+    for (int row_id = 0; row_id < m_row_ids_to_data.size(); ++row_id) {
+      for (int i = 0; i < m_nr_channels; ++i) {
+        m_bufferVisibilities2(row_id, i, 0) =
+            *(m_row_ids_to_data[row_id].second + i * 2);
+        m_bufferVisibilities2(row_id, i, 3) =
+            *(m_row_ids_to_data[row_id].second + i * 2 + 1);
+      }
+      m_row_ids_to_data[row_id].second = m_bufferVisibilities2.data(row_id);
+    }
+  }
   return std::move(m_row_ids_to_data);
 }
 
@@ -176,7 +185,14 @@ void DegridderBufferImpl::finished_reading() {
   m_data_read = true;
 }
 
-void DegridderBufferImpl::malloc_buffers() { BufferImpl::malloc_buffers(); }
+void DegridderBufferImpl::malloc_buffers() {
+  BufferImpl::malloc_buffers();
+
+  if (m_bufferset.get_nr_correlations() == 2) {
+    m_bufferVisibilities2 = Array3D<std::complex<float>>(
+        m_nr_baselines * m_bufferTimesteps, m_nr_channels, 4);
+  }
+}
 
 }  // namespace api
 }  // namespace idg

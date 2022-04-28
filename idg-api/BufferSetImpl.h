@@ -31,8 +31,7 @@ class BufferSetImpl : public virtual BufferSet {
   GridderBuffer* get_gridder(int i) final override;
 
   virtual void init(size_t width, float cellsize, float max_w, float shiftl,
-                    float shiftm, float shiftp,
-                    options_type& options) final override;
+                    float shiftm, options_type& options) final override;
 
   virtual void init_buffers(size_t bufferTimesteps,
                             std::vector<std::vector<double>> bands,
@@ -74,12 +73,14 @@ class BufferSetImpl : public virtual BufferSet {
 
   void report_runtime();
 
+  int get_nr_correlations() const { return m_nr_correlations; }
+  int get_nr_polarizations() const { return m_nr_polarizations; }
+
   float get_cell_size() const { return m_cell_size; }
   float get_w_step() const { return m_w_step; }
-  const std::array<float, 3>& get_shift() const { return m_shift; }
+  const idg::Array1D<float>& get_shift() const { return m_shift; }
   float get_kernel_size() const { return m_kernel_size; }
   const Array2D<float>& get_spheroidal() const { return m_spheroidal; }
-  const std::shared_ptr<Grid>& get_grid() const { return m_grid; }
 
   Stopwatch& get_watch(Watch watch) const;
 
@@ -97,6 +98,9 @@ class BufferSetImpl : public virtual BufferSet {
  private:
   std::unique_ptr<proxy::Proxy> create_proxy(Type architecture);
 
+  std::shared_ptr<idg::Grid> allocate_grid();
+  void free_grid();
+
   std::unique_ptr<proxy::Proxy> m_proxy;
   BufferSetType m_buffer_set_type;
   std::vector<std::unique_ptr<GridderBufferImpl>> m_gridderbuffers;
@@ -111,12 +115,15 @@ class BufferSetImpl : public virtual BufferSet {
   std::shared_ptr<std::vector<std::complex<float>>> m_matrix_inverse_beam;
   Array4D<std::complex<float>> m_default_aterm_correction;
   Array4D<std::complex<float>> m_avg_aterm_correction;
-  std::shared_ptr<Grid> m_grid;
+  bool m_stokes_I_only;
+  int m_nr_correlations;
+  int m_nr_polarizations;
   size_t m_subgridsize;
   float m_image_size;
   float m_cell_size;
   float m_w_step;
-  std::array<float, 3> m_shift;
+  int m_nr_w_layers;
+  Array1D<float> m_shift;
   size_t m_size;
   size_t m_padded_size;
   float m_kernel_size;

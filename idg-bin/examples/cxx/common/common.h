@@ -25,7 +25,8 @@
 
 using namespace std;
 
-std::tuple<int, int, int, int, int, int, int, int, int, int, int, float>
+std::tuple<int, int, int, int, int, int, int, int, int, int, int, float, bool,
+           bool, const char *>
 read_parameters() {
   const unsigned int DEFAULT_NR_STATIONS = 52;      // all LOFAR LBA stations
   const unsigned int DEFAULT_NR_CHANNELS = 16 * 4;  // 16 channels, 4 subbands
@@ -37,6 +38,9 @@ read_parameters() {
   const unsigned int DEFAULT_SUBGRIDSIZE = 32;
   const unsigned int DEFAULT_NR_CYCLES = 1;
   const float DEFAULT_GRID_PADDING = 1.0;
+  const bool DEFAULT_USE_WTILES = false;
+  const bool DEFAULT_STOKES_I_ONLY = false;
+  const char *DEFAULT_LAYOUT_FILE = "LOFAR_lba.txt";
 
   char *cstr_nr_stations = getenv("NR_STATIONS");
   auto nr_stations =
@@ -84,10 +88,23 @@ read_parameters() {
   auto grid_padding =
       cstr_grid_padding ? atof(cstr_grid_padding) : DEFAULT_GRID_PADDING;
 
+  char *cstr_use_wtiles = getenv("USE_WTILES");
+  auto use_wtiles =
+      cstr_use_wtiles ? atoi(cstr_use_wtiles) : DEFAULT_USE_WTILES;
+
+  char *cstr_stokes_i_only = getenv("STOKES_I_ONLY");
+  auto stokes_i_only =
+      cstr_stokes_i_only ? atoi(cstr_stokes_i_only) : DEFAULT_STOKES_I_ONLY;
+
+  char *cstr_layout_file = getenv("LAYOUT_FILE");
+  const char *layout_file =
+      cstr_layout_file ? cstr_layout_file : DEFAULT_LAYOUT_FILE;
+
   return std::make_tuple(total_nr_stations, total_nr_channels,
                          total_nr_timesteps, nr_stations, nr_channels,
                          nr_timesteps, nr_timeslots, grid_size, subgrid_size,
-                         kernel_size, nr_cycles, grid_padding);
+                         kernel_size, nr_cycles, grid_padding, use_wtiles,
+                         stokes_i_only, layout_file);
 }
 
 void print_parameters(unsigned int total_nr_stations,
@@ -96,7 +113,8 @@ void print_parameters(unsigned int total_nr_stations,
                       unsigned int nr_channels, unsigned int nr_timesteps,
                       unsigned int nr_timeslots, float image_size,
                       unsigned int grid_size, unsigned int subgrid_size,
-                      unsigned int kernel_size, float grid_padding) {
+                      unsigned int kernel_size, float w_step,
+                      float grid_padding, bool stokes_i_only) {
   const int fw1 = 30;
   const int fw2 = 10;
   ostream &os = clog;
@@ -137,8 +155,14 @@ void print_parameters(unsigned int total_nr_stations,
   os << setw(fw1) << left << "Kernel size"
      << "== " << setw(fw2) << right << kernel_size << endl;
 
+  os << setw(fw1) << left << "W step size"
+     << "== " << setw(fw2) << right << w_step << endl;
+
   os << setw(fw1) << left << "Grid padding"
      << "== " << setw(fw2) << right << grid_padding << endl;
+
+  os << setw(fw1) << left << "Stokes I only"
+     << "== " << setw(fw2) << right << stokes_i_only << endl;
 
   os << "-----------" << endl;
 }
@@ -149,7 +173,7 @@ void run() {
   // Constants
   unsigned int nr_w_layers = 1;
   unsigned int nr_correlations = 4;
-  float w_offset = 0;
+  unsigned int nr_polarizations = 4;
   unsigned int total_nr_stations;
   unsigned int total_nr_timesteps;
   unsigned int total_nr_channels;
@@ -163,40 +187,44 @@ void run() {
   unsigned int kernel_size;
   unsigned int nr_cycles;
   float grid_padding;
+  bool use_wtiles;
+  bool stokes_i_only;
+  const char *layout_file;
 
   // Read parameters from environment
   std::tie(total_nr_stations, total_nr_channels, total_nr_timesteps,
            nr_stations, nr_channels, nr_timesteps, nr_timeslots, grid_size,
-           subgrid_size, kernel_size, nr_cycles, grid_padding) =
-      read_parameters();
+           subgrid_size, kernel_size, nr_cycles, grid_padding, use_wtiles,
+           stokes_i_only, layout_file) = read_parameters();
   unsigned int nr_baselines = (nr_stations * (nr_stations - 1)) / 2;
+
+  // Update parameters for Stokes-I only mode
+  if (stokes_i_only) {
+    nr_correlations = 2;
+    nr_polarizations = 1;
+  }
 
   // Initialize Data object
   clog << ">>> Initialize data" << endl;
-  idg::Data data;
-
-  // Determine the max baseline length for given grid_size
-  auto max_uv = data.compute_max_uv(grid_padding * grid_size);
-
-  // Select only baselines up to max_uv meters long
-  data.limit_max_baseline_length(max_uv);
-
-  // Restrict the number of baselines to nr_baselines
-  data.limit_nr_baselines(nr_baselines);
+  idg::Data data = idg::get_example_data(
+      nr_baselines, grid_size, integration_time, nr_channels, layout_file);
 
   // Print data info
   data.print_info();
 
   // Get remaining parameters
   nr_baselines = data.get_nr_baselines();
-  float image_size = data.compute_image_size(grid_padding * grid_size);
+  float image_size =
+      data.compute_image_size(grid_padding * grid_size, nr_channels);
   float cell_size = image_size / grid_size;
+  float w_step =
+      use_wtiles ? (2 * kernel_size) / (image_size * image_size) : 0.0;
 
   // Print parameters
   print_parameters(total_nr_stations, total_nr_channels, total_nr_timesteps,
                    nr_stations, nr_channels, nr_timesteps, nr_timeslots,
-                   image_size, grid_size, subgrid_size, kernel_size,
-                   grid_padding);
+                   image_size, grid_size, subgrid_size, kernel_size, w_step,
+                   grid_padding, stokes_i_only);
 
   // Warn for unrealistic number of timesteps
   float observation_length = (total_nr_timesteps * integration_time) / 3600;
@@ -213,9 +241,8 @@ void run() {
   // Allocate and initialize static data structures
   clog << ">>> Initialize data structures" << endl;
 #if USE_DUMMY_VISIBILITIES
-  idg::Array3D<idg::Visibility<std::complex<float>>> visibilities_ =
-      idg::get_dummy_visibilities(proxy, nr_baselines, nr_timesteps,
-                                  nr_channels);
+  idg::Array4D<std::complex<float>> visibilities_ = idg::get_dummy_visibilities(
+      proxy, nr_baselines, nr_timesteps, nr_channels, nr_correlations);
 #endif
   idg::Array4D<idg::Matrix2x2<std::complex<float>>> aterms =
       idg::get_identity_aterms(proxy, nr_timeslots, nr_stations, subgrid_size,
@@ -225,7 +252,8 @@ void run() {
   idg::Array2D<float> spheroidal =
       idg::get_example_spheroidal(proxy, subgrid_size, subgrid_size);
   auto grid =
-      proxy.allocate_grid(nr_w_layers, nr_correlations, grid_size, grid_size);
+      proxy.allocate_grid(nr_w_layers, nr_polarizations, grid_size, grid_size);
+  grid->zero();
   idg::Array1D<float> shift = idg::get_zero_shift();
   idg::Array1D<std::pair<unsigned int, unsigned int>> baselines =
       idg::get_example_baselines(proxy, nr_stations, nr_baselines);
@@ -235,8 +263,10 @@ void run() {
   vector<double> runtimes_gridding;
   vector<double> runtimes_degridding;
   vector<double> runtimes_fft;
+  vector<double> runtimes_get_image;
   vector<double> runtimes_imaging;
-  unsigned long nr_visibilities = 0;
+  unsigned long nr_visibilities =
+      nr_cycles * nr_baselines * total_nr_timesteps * nr_channels;
 
   // Enable/disable routines
   bool disable_gridding = getenv("DISABLE_GRIDDING");
@@ -246,22 +276,35 @@ void run() {
   // Spectral line imaging
   bool simulate_spectral_line = getenv("SPECTRAL_LINE");
 
-  // Vectors for Plan and UVW
+  // Plan options
   idg::Plan::Options options;
   options.plan_strict = true;
   options.simulate_spectral_line = simulate_spectral_line;
   options.max_nr_timesteps_per_subgrid = 128;
   options.max_nr_channels_per_subgrid = 8;
+  options.mode = stokes_i_only ? idg::Plan::Mode::STOKES_I_ONLY
+                               : idg::Plan::Mode::FULL_POLARIZATION;
   omp_set_nested(true);
+
+  // Vector of plans
+  std::vector<std::unique_ptr<idg::Plan>> plans;
+
+  // Set grid
+  proxy.set_grid(grid);
+
+  // Init cache
+  proxy.init_cache(subgrid_size, cell_size, w_step, shift);
 
   // Iterate all cycles
   for (unsigned cycle = 0; cycle < nr_cycles; cycle++) {
-    // Set grid
-    proxy.set_grid(grid);
+    // Start imaging
+    double runtime_imaging = -omp_get_wtime();
 
     // Iterate all time blocks
-    for (unsigned time_offset = 0; time_offset < total_nr_timesteps;
-         time_offset += nr_timesteps) {
+    unsigned int nr_time_blocks =
+        std::ceil((float)total_nr_timesteps / nr_timesteps);
+    for (unsigned int t = 0; t < nr_time_blocks; t++) {
+      int time_offset = t * nr_timesteps;
       int current_nr_timesteps = total_nr_timesteps - time_offset < nr_timesteps
                                      ? total_nr_timesteps - time_offset
                                      : nr_timesteps;
@@ -289,31 +332,30 @@ void run() {
 
 // Initialize visibilities
 #if !USE_DUMMY_VISIBILITIES
-        idg::Array3D<idg::Visibility<std::complex<float>>> visibilities_ =
+        idg::Array4D<std::complex<float>> visibilities_ =
             idg::get_example_visibilities(proxy, uvw, frequencies, image_size,
-                                          grid_size);
+                                          grid_size, nr_correlations);
 #endif
 
         auto nr_channels_ = simulate_spectral_line ? 1 : nr_channels;
-        idg::Array3D<idg::Visibility<std::complex<float>>> visibilities(
+        idg::Array4D<std::complex<float>> visibilities(
             visibilities_.data(), nr_baselines, current_nr_timesteps,
-            nr_channels_);
+            nr_channels_, nr_correlations);
 
         // Create plan
-        auto plan = std::unique_ptr<idg::Plan>(new idg::Plan(
-            kernel_size, subgrid_size, grid_size, cell_size, frequencies, uvw,
-            baselines, aterms_offsets, options));
-
-        // Start imaging
-        double runtime_imaging = -omp_get_wtime();
+        if (plans.size() == 0 || cycle == 0) {
+          plans.emplace_back(proxy.make_plan(kernel_size, frequencies, uvw,
+                                             baselines, aterms_offsets,
+                                             options));
+        }
+        idg::Plan &plan = *plans[t];
 
         // Run gridding
         clog << ">>> Run gridding" << endl;
         double runtime_gridding = -omp_get_wtime();
         if (!disable_gridding)
-          proxy.gridding(*plan, w_offset, shift, cell_size, kernel_size,
-                         subgrid_size, frequencies, visibilities, uvw,
-                         baselines, *grid, aterms, aterms_offsets, spheroidal);
+          proxy.gridding(plan, frequencies, visibilities, uvw, baselines,
+                         aterms, aterms_offsets, spheroidal);
         runtimes_gridding.push_back(runtime_gridding + omp_get_wtime());
         clog << endl;
 
@@ -321,45 +363,34 @@ void run() {
         clog << ">>> Run degridding" << endl;
         double runtime_degridding = -omp_get_wtime();
         if (!disable_degridding)
-          proxy.degridding(*plan, w_offset, shift, cell_size, kernel_size,
-                           subgrid_size, frequencies, visibilities, uvw,
-                           baselines, *grid, aterms, aterms_offsets,
-                           spheroidal);
+          proxy.degridding(plan, frequencies, visibilities, uvw, baselines,
+                           aterms, aterms_offsets, spheroidal);
         runtimes_degridding.push_back(runtime_degridding + omp_get_wtime());
         clog << endl;
-
-        // End imaging
-        runtimes_imaging.push_back(runtime_imaging + omp_get_wtime());
       }  // end for channel_offset
     }    // end for time_offset
+
+    // Only after a call to get_final_grid(), the grid can be used outside of
+    // the proxy
+    clog << ">>> Get final grid" << endl;
+    double runtime_get_image = -omp_get_wtime();
+    proxy.get_final_grid();
+    runtimes_get_image.push_back(runtime_get_image + omp_get_wtime());
+    clog << endl;
 
     // Run fft
     clog << ">>> Run fft" << endl;
     double runtime_fft = -omp_get_wtime();
-    if (!disable_fft)
-      for (unsigned w = 0; w < nr_w_layers; w++) {
-        idg::Array3D<std::complex<float>> grid_(grid->data(w), nr_correlations,
-                                                grid_size, grid_size);
-        proxy.transform(idg::FourierDomainToImageDomain, grid_);
-        proxy.transform(idg::ImageDomainToFourierDomain, grid_);
-      }
+    if (!disable_fft) {
+      proxy.transform(idg::FourierDomainToImageDomain);
+      proxy.transform(idg::ImageDomainToFourierDomain);
+    }
     runtimes_fft.push_back(runtime_fft + omp_get_wtime());
     clog << endl;
 
-    // Only after a call to get_grid(), the grid can be used outside of the
-    // proxy
-    proxy.get_grid();
+    // End imaging
+    runtimes_imaging.push_back(runtime_imaging + omp_get_wtime());
   }  // end for i (nr_cycles)
-
-  // Compute maximum runtime
-  double max_runtime_gridding =
-      *max_element(runtimes_gridding.begin(), runtimes_gridding.end());
-  double max_runtime_degridding =
-      *max_element(runtimes_degridding.begin(), runtimes_degridding.end());
-  double max_runtime_fft =
-      *max_element(runtimes_fft.begin(), runtimes_fft.end());
-  double max_runtime_imaging =
-      *max_element(runtimes_imaging.begin(), runtimes_imaging.end());
 
   // Compute total runtime
   double runtime_gridding =
@@ -368,32 +399,25 @@ void run() {
       accumulate(runtimes_degridding.begin(), runtimes_degridding.end(), 0.0);
   double runtime_fft =
       accumulate(runtimes_fft.begin(), runtimes_fft.end(), 0.0);
+  double runtime_get_image =
+      accumulate(runtimes_get_image.begin(), runtimes_get_image.end(), 0.0);
   double runtime_imaging =
       accumulate(runtimes_imaging.begin(), runtimes_imaging.end(), 0.0);
 
-  // Ignore slowest run
-  if (nr_cycles > 1) {
-    runtime_gridding -= max_runtime_gridding;
-    runtime_degridding -= max_runtime_degridding;
-    runtime_fft -= max_runtime_fft;
-    runtime_imaging -= max_runtime_imaging;
-    nr_cycles -= 1;
-  }
-
-  // Compute runtime for one cycle
-  runtime_gridding /= nr_cycles;
-  runtime_degridding /= nr_cycles;
-  runtime_imaging /= nr_cycles;
-  runtime_imaging /= nr_cycles;
-
   // Report runtime
-  idg::report("gridding", runtime_gridding);
-  idg::report("degridding", runtime_degridding);
-  idg::report("fft", runtime_fft);
+  clog << ">>> Total runtime" << endl;
+  if (!disable_gridding) idg::report("gridding", runtime_gridding);
+  if (!disable_degridding) idg::report("degridding", runtime_degridding);
+  if (!disable_fft) idg::report("fft", runtime_fft);
+  idg::report("get_image", runtime_get_image);
   idg::report("imaging", runtime_imaging);
+  clog << endl;
 
   // Report throughput
-  idg::report_visibilities("gridding", runtime_gridding, nr_visibilities);
-  idg::report_visibilities("degridding", runtime_degridding, nr_visibilities);
+  clog << ">>> Total throughput" << endl;
+  if (!disable_gridding)
+    idg::report_visibilities("gridding", runtime_gridding, nr_visibilities);
+  if (!disable_degridding)
+    idg::report_visibilities("degridding", runtime_degridding, nr_visibilities);
   idg::report_visibilities("imaging", runtime_imaging, nr_visibilities);
 }

@@ -40,10 +40,10 @@ for _nr_timesteps in [1*60*60, 6*60*60, 12*60*60]:
             # initialize data
             ######################################################################
             data = Data(layout_file)
-            max_uv = data.compute_max_uv(grid_size) # m
+            max_uv = data.compute_max_uv(grid_size, nr_channels) # m
             data.limit_max_baseline_length(max_uv)
             data.limit_nr_baselines(nr_baselines)
-            image_size = round(data.compute_image_size(grid_size), 4)
+            image_size = round(data.compute_image_size(grid_size, nr_channels), 4)
             cell_size  = image_size / grid_size
 
             channel_offset  = 0
@@ -54,7 +54,7 @@ for _nr_timesteps in [1*60*60, 6*60*60, 12*60*60]:
             frequencies    = numpy.zeros((nr_channels), dtype=idg.frequenciestype)
             data.get_frequencies(frequencies, nr_channels, image_size, channel_offset)
             data.get_uvw(uvw, nr_baselines, nr_timesteps, baseline_offset, time_offset, integration_time)
-            baselines      = idg.util.get_example_baselines(nr_baselines)
+            baselines      = idg.util.get_example_baselines(nr_stations, nr_baselines)
             aterms_offsets = idg.util.get_example_aterms_offset(nr_timeslots, nr_timesteps)
 
             ######################################################################

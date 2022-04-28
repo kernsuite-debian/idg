@@ -34,63 +34,68 @@ Unified::~Unified() {
 #endif
 }
 
-void Unified::do_transform(DomainAtoDomainB direction,
-                           Array3D<std::complex<float>>& grid) {
+void Unified::do_transform(idg::DomainAtoDomainB direction) {
 #if defined(DEBUG)
   std::cout << "Unified::" << __func__ << std::endl;
-  cout << "Transform direction: " << direction << endl;
 #endif
 
-  // TODO: fix this method
-  // (1) does the m_grid_tiled need to be untiled before use?
-  // (2) even though m_grid_tiled is Unified Memory, cuFFT fails
-
   // Constants
-  auto nr_correlations = grid.get_z_dim();
-  ;
-  auto grid_size = grid.get_x_dim();
+  unsigned int grid_size = m_grid->get_x_dim();
+  unsigned int nr_w_layers = m_grid->get_w_dim();
+  assert(nr_w_layers == 1);
+  unsigned int nr_polarizations = m_grid->get_z_dim();
 
-  // Load device
+  // Load CUDA objects
   InstanceCUDA& device = get_device(0);
-
-  // Get UnifiedMemory object for grid data
-  cu::UnifiedMemory u_grid(m_grid_tiled->data(), m_grid_tiled->bytes());
-
-  // Initialize
   cu::Stream& stream = device.get_execute_stream();
-  device.set_context();
+  cu::Context& context = device.get_context();
+
+  // Create Array5D reference for u_grid
+  unsigned int tile_size = device.get_tile_size_grid();
+  unsigned int nr_tiles_1d = grid_size / tile_size;
+  cu::UnifiedMemory& u_grid = get_unified_grid();
+  idg::Array5D<std::complex<float>> grid_tiled(
+      static_cast<std::complex<float>*>(u_grid.data()), nr_tiles_1d,
+      nr_tiles_1d, nr_polarizations, tile_size, tile_size);
 
   // Performance measurements
-  report.initialize(0, 0, grid_size);
-  device.set_report(report);
-  PowerRecord powerRecords[2];
-  State powerStates[4];
+  m_report->initialize(0, 0, grid_size);
+  device.set_report(m_report);
+  powersensor::State powerStates[4];
   powerStates[0] = hostPowerSensor->read();
   powerStates[2] = device.measure();
 
+  // Tile the grid backwards, this is only needed when ::transform is called
+  // directly after gridding. When ::get_final_grid is called first, m_grid
+  // can be used directly.
+  if (m_enable_tiling && m_grid_is_tiled) {
+    device.tile_backward(nr_polarizations, grid_size, tile_size, grid_tiled,
+                         *m_grid);
+  }
+
+  // Copy grid to device
+  cu::DeviceMemory d_grid(context, m_grid->bytes());
+  stream.memcpyHtoDAsync(d_grid, m_grid->data(), m_grid->bytes());
+
   // Perform fft shift
-  double time_shift = -omp_get_wtime();
-  device.shift(grid);
-  time_shift += omp_get_wtime();
+  device.launch_fft_shift(d_grid, nr_polarizations, grid_size);
 
   // Execute fft
-  device.measure(powerRecords[0], stream);
-  device.launch_grid_fft_unified(grid_size, nr_correlations, grid, direction);
-  device.measure(powerRecords[1], stream);
-  stream.synchronize();
+  device.launch_grid_fft(d_grid, nr_polarizations, grid_size, direction);
 
-  // Perform fft shift
-  time_shift = -omp_get_wtime();
-  device.shift(grid);
-  time_shift += omp_get_wtime();
+  // Perform fft shift and scaling
+  std::complex<float> scale =
+      (direction == FourierDomainToImageDomain)
+          ? std::complex<float>(2.0 / (grid_size * grid_size), 0)
+          : std::complex<float>(1.0, 1.0);
+  device.launch_fft_shift(d_grid, nr_polarizations, grid_size, scale);
 
-  // Perform fft scaling
-  double time_scale = -omp_get_wtime();
-  complex<float> scale = complex<float>(2.0 / (grid_size * grid_size), 0);
-  if (direction == FourierDomainToImageDomain) {
-    device.scale(grid, scale);
-  }
-  time_scale += omp_get_wtime();
+  // Copy grid back to the host
+  stream.memcpyDtoHAsync(m_grid->data(), d_grid, m_grid->bytes());
+
+  // Remember that the m_grid is not (or no longer) tiled. Since we did not
+  // alter u_grid_, there is no need to perform forward tiling here.
+  m_grid_is_tiled = false;
 
   // End measurements
   stream.synchronize();
@@ -98,113 +103,70 @@ void Unified::do_transform(DomainAtoDomainB direction,
   powerStates[3] = device.measure();
 
   // Report performance
-  report.update_grid_fft(powerRecords[0].state, powerRecords[1].state);
-  report.update_fft_shift(time_shift);
-  report.update_fft_scale(time_scale);
-  report.print_total();
-  report.print_device(powerStates[2], powerStates[3]);
-  clog << endl;
-}  // end transform
-
-void Unified::do_gridding(
-    const Plan& plan,
-    const float w_step,  // in lambda
-    const Array1D<float>& shift, const float cell_size,
-    const unsigned int kernel_size,  // full width in pixels
-    const unsigned int subgrid_size, const Array1D<float>& frequencies,
-    const Array3D<Visibility<std::complex<float>>>& visibilities,
-    const Array2D<UVW<float>>& uvw,
-    const Array1D<std::pair<unsigned int, unsigned int>>& baselines, Grid& grid,
-    const Array4D<Matrix2x2<std::complex<float>>>& aterms,
-    const Array1D<unsigned int>& aterms_offsets,
-    const Array2D<float>& spheroidal) {
-#if defined(DEBUG)
-  std::cout << "Unified::" << __func__ << std::endl;
-#endif
-  if (!m_use_unified_memory) {
-    throw std::runtime_error("Unified memory needs to be enabled!");
-  }
-
-#if defined(DEBUG)
-  std::clog << "### Initialize gridding" << std::endl;
-#endif
-  CUDA::initialize(plan, w_step, shift, cell_size, kernel_size, subgrid_size,
-                   frequencies, visibilities, uvw, baselines, aterms,
-                   aterms_offsets, spheroidal);
-
-#if defined(DEBUG)
-  std::clog << "### Run gridding" << std::endl;
-#endif
-  auto grid_ptr = m_enable_tiling ? m_grid_tiled.get() : m_grid.get();
-  Generic::run_gridding(plan, w_step, shift, cell_size, kernel_size,
-                        subgrid_size, frequencies, visibilities, uvw, baselines,
-                        *grid_ptr, aterms, aterms_offsets, spheroidal);
-}  // end gridding
-
-void Unified::do_degridding(
-    const Plan& plan,
-    const float w_step,  // in lambda
-    const Array1D<float>& shift, const float cell_size,
-    const unsigned int kernel_size,  // full width in pixels
-    const unsigned int subgrid_size, const Array1D<float>& frequencies,
-    Array3D<Visibility<std::complex<float>>>& visibilities,
-    const Array2D<UVW<float>>& uvw,
-    const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
-    const Grid& grid, const Array4D<Matrix2x2<std::complex<float>>>& aterms,
-    const Array1D<unsigned int>& aterms_offsets,
-    const Array2D<float>& spheroidal) {
-#if defined(DEBUG)
-  std::cout << "Unified::" << __func__ << std::endl;
-#endif
-  if (!m_use_unified_memory) {
-    throw std::runtime_error("Unified memory needs to be enabled!");
-  }
-
-#if defined(DEBUG)
-  std::clog << "### Initialize degridding" << std::endl;
-#endif
-  CUDA::initialize(plan, w_step, shift, cell_size, kernel_size, subgrid_size,
-                   frequencies, visibilities, uvw, baselines, aterms,
-                   aterms_offsets, spheroidal);
-
-#if defined(DEBUG)
-  std::clog << "### Run degridding" << std::endl;
-#endif
-  auto grid_ptr = m_enable_tiling ? m_grid_tiled.get() : m_grid.get();
-  Generic::run_degridding(plan, w_step, shift, cell_size, kernel_size,
-                          subgrid_size, frequencies, visibilities, uvw,
-                          baselines, *grid_ptr, aterms, aterms_offsets,
-                          spheroidal);
-}  // end degridding
+  m_report->update<Report::host>(powerStates[0], powerStates[1]);
+  m_report->update<Report::device>(powerStates[2], powerStates[3]);
+  m_report->print_total(nr_polarizations);
+}
 
 void Unified::set_grid(std::shared_ptr<Grid> grid) {
   m_grid = grid;
 
-  if (m_enable_tiling) {
-    InstanceCUDA& device = get_device(0);
+  const InstanceCUDA& device = get_device(0);
+  const cu::Context& context = device.get_context();
 
-    auto nr_w_layers = grid->get_w_dim();
-    auto nr_correlations = grid->get_z_dim();
-    auto grid_height = grid->get_y_dim();
-    auto grid_width = grid->get_x_dim();
-    assert(nr_correlations == NR_CORRELATIONS);
+  if (!m_enable_tiling) {
+    // Allocate grid in Unified memory
+    cu::UnifiedMemory& u_grid = allocate_unified_grid(context, grid->bytes());
+
+    // Copy grid to Unified Memory
+    char* first = reinterpret_cast<char*>(grid->data());
+    char* result = reinterpret_cast<char*>(u_grid.data());
+    std::copy_n(first, grid->bytes(), result);
+  } else {
+    // Allocate tiled grid in Unified memory
+    int nr_w_layers = grid->get_w_dim();
+    assert(nr_w_layers == 1);
+    int nr_polarizations = grid->get_z_dim();
+    int grid_height = grid->get_y_dim();
+    int grid_width = grid->get_x_dim();
     assert(grid_height == grid_width);
-    auto grid_size = grid_width;
-    auto tile_size = device.get_tile_size_grid();
-    cu::UnifiedMemory* u_grid_tiled = new cu::UnifiedMemory(m_grid->bytes());
-    auto grid_tiled = new Grid(*u_grid_tiled, nr_w_layers, nr_correlations,
-                               grid_height, grid_width);
-    m_grid_tiled.reset(grid_tiled);
-    device.tile_forward(grid_size, tile_size, *grid, *m_grid_tiled);
+    int grid_size = grid_width;
+    int tile_size = device.get_tile_size_grid();
+    int nr_tiles_1d = grid_size / tile_size;
+    size_t sizeof_grid_tiled = size_t(nr_tiles_1d) * nr_tiles_1d *
+                               nr_polarizations * tile_size * tile_size *
+                               sizeof(std::complex<float>);
+    cu::UnifiedMemory& u_grid =
+        allocate_unified_grid(context, sizeof_grid_tiled);
+
+    // Forward tiling
+    idg::Array5D<std::complex<float>> grid_tiled(
+        static_cast<std::complex<float>*>(u_grid.data()), nr_tiles_1d,
+        nr_tiles_1d, nr_polarizations, tile_size, tile_size);
+    device.tile_forward(nr_polarizations, grid_size, tile_size, *grid,
+                        grid_tiled);
+    m_grid_is_tiled = true;
   }
 }
 
-std::shared_ptr<Grid> Unified::get_grid() {
-  if (m_enable_tiling) {
-    InstanceCUDA& device = get_device(0);
-    auto grid_size = m_grid->get_x_dim();
-    auto tile_size = device.get_tile_size_grid();
-    device.tile_backward(grid_size, tile_size, *m_grid_tiled, *m_grid);
+std::shared_ptr<Grid> Unified::get_final_grid() {
+  if (m_grid_is_tiled) {
+    const InstanceCUDA& device = get_device(0);
+
+    // Create Array5D reference for u_grid
+    int nr_polarizations = m_grid->get_z_dim();
+    int grid_size = m_grid->get_x_dim();
+    int tile_size = device.get_tile_size_grid();
+    int nr_tiles_1d = grid_size / tile_size;
+    cu::UnifiedMemory& u_grid = get_unified_grid();
+    idg::Array5D<std::complex<float>> grid_tiled(
+        static_cast<std::complex<float>*>(u_grid.data()), nr_tiles_1d,
+        nr_tiles_1d, nr_polarizations, tile_size, tile_size);
+
+    // Restore the grid
+    device.tile_backward(nr_polarizations, grid_size, tile_size, grid_tiled,
+                         *m_grid);
+    m_grid_is_tiled = false;
   }
 
   return m_grid;
@@ -213,5 +175,3 @@ std::shared_ptr<Grid> Unified::get_grid() {
 }  // namespace cuda
 }  // namespace proxy
 }  // namespace idg
-
-#include "UnifiedC.h"
