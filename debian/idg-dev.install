@@ -1,8 +1,8 @@
-usr/bin/examples
-usr/data
-usr/include/*
-usr/lib/cmake/*cmake
-usr/share/*.cmake 
-usr/lib/*.so
-usr/share/idgapi/cmake/idgapi-config.cmake
-
+./usr/bin/examples
+./usr/data
+./usr/include/*
+./usr/lib/cmake/*cmake
+./usr/share/*.cmake
+./usr/lib/*.so
+./usr/share/idgapi/cmake/idgapi-config.cmake
+./usr/share/idgapi/cmake/idgapi-config-version.cmake

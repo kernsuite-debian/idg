@@ -169,6 +169,7 @@
 ./usr/share/idgapi/
 ./usr/share/idgapi/cmake/
 ./usr/share/idgapi/cmake/idgapi-config.cmake
+./usr/share/idgapi/cmake/idgapi-config-version.cmake
 ./usr/lib/idg-cpu/Optimized/libcpu-optimized-kernel-adder-wstack.so
 ./usr/lib/idg-cpu/Optimized/libcpu-optimized-kernel-adder-wtiles.so
 ./usr/lib/idg-cpu/Optimized/libcpu-optimized-kernel-adder.so

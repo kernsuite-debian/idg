@@ -1,3 +1,10 @@
+idg (1.0.0-1kern2) focal; urgency=medium
+
+  [ Athanaseus Javas Ramaila ]
+  * New build
+
+ -- KERN packaging <packaging@kernsuite.info>  Tue, 03 May 2022 12:01:14 +0000
+
 idg (1.0.0-1kern1) focal; urgency=medium
 
   [ Athanaseus Javas Ramaila ]
