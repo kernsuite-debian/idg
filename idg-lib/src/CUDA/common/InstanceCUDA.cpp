@@ -1,4 +1,4 @@
-// Copyright (C) 2020 ASTRON (Netherlands Institute for Radio Astronomy)
+// Copyright (C) 2023 ASTRON (Netherlands Institute for Radio Astronomy)
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <algorithm>
@@ -10,7 +10,6 @@
 #include "kernels/KernelDegridder.cuh"
 
 using namespace idg::kernel;
-using namespace powersensor;
 
 /*
  * Option to enable repeated kernel invocations
@@ -22,30 +21,23 @@ using namespace powersensor;
 #define NR_REPETITIONS_ADDER 50
 #define NR_REPETITIONS_GRID_FFT 500
 
-/*
- * Use custom FFT kernel
- */
-#define USE_CUSTOM_FFT 0
-
-namespace idg {
-namespace kernel {
-namespace cuda {
+namespace idg::kernel::cuda {
 
 // Constructor
-InstanceCUDA::InstanceCUDA(ProxyInfo& info, int device_id)
-    : KernelsInstance(), mInfo(info) {
+InstanceCUDA::InstanceCUDA(ProxyInfo& info, size_t device_id)
+    : KernelsInstance(), proxy_info_(info) {
 #if defined(DEBUG)
   std::cout << __func__ << std::endl;
 #endif
 
   // Initialize members
-  device.reset(new cu::Device(device_id));
-  context.reset(new cu::Context(*device));
-  executestream.reset(new cu::Stream(*context));
-  htodstream.reset(new cu::Stream(*context));
-  dtohstream.reset(new cu::Stream(*context));
-  m_powersensor.reset(
-      powersensor::get_power_sensor(powersensor::sensor_device, device_id));
+  device_.reset(new cu::Device(device_id));
+  context_.reset(new cu::Context(*device_));
+  profiler_.reset(new cu::Profiler(*context_));
+  stream_execute_.reset(new cu::Stream(*context_));
+  stream_htod_.reset(new cu::Stream(*context_));
+  stream_dtoh_.reset(new cu::Stream(*context_));
+  power_meter_ = pmt::get_power_meter(pmt::sensor_device, device_id);
 
   // Compile kernels
   compile_kernels();
@@ -62,12 +54,13 @@ InstanceCUDA::~InstanceCUDA() {
 
   free_subgrid_fft();
   free_events();
-  m_modules.clear();
-  executestream.reset();
-  htodstream.reset();
-  dtohstream.reset();
-  context.reset();
-  device.reset();
+  modules_.clear();
+  stream_execute_.reset();
+  stream_htod_.reset();
+  stream_dtoh_.reset();
+  profiler_.reset();
+  context_.reset();
+  device_.reset();
 }
 
 /*
@@ -79,16 +72,19 @@ std::string InstanceCUDA::get_compiler_flags() {
 
   // CUDA specific flags
   std::stringstream flags_cuda;
-  flags_cuda << "-use_fast_math ";
+  flags_cuda << "-use_fast_math";
 #if defined(CUDA_KERNEL_DEBUG)
   flags_cuda << " -G ";
 #else
-  flags_cuda << "-lineinfo ";
+  flags_cuda << " -lineinfo";
 #endif
-  flags_cuda << "-src-in-ptx";
+  flags_cuda << " -src-in-ptx";
+#if defined(USE_EXTRAPOLATE)
+  flags_cuda << " -DUSE_EXTRAPOLATE";
+#endif
 
   // Device specific flags
-  int capability = (*device).get_capability();
+  int capability = (*device_).get_capability();
   std::stringstream flags_device;
   flags_device << "-arch=sm_" << capability;
 
@@ -105,16 +101,16 @@ std::string InstanceCUDA::get_compiler_flags() {
 cu::Module* InstanceCUDA::compile_kernel(std::string& flags, std::string& src,
                                          std::string& bin) {
   // Create a string with the full path to the cubin file "kernel.cubin"
-  std::string lib = mInfo.get_path_to_lib() + "/" + bin;
+  std::string lib = proxy_info_.get_path_to_lib() + "/" + bin;
 
   // Create a string for all sources that are combined
-  std::string source = mInfo.get_path_to_src() + "/" + src;
+  std::string source = proxy_info_.get_path_to_src() + "/" + src;
 
   // Call the compiler
   cu::Source(source.c_str()).compile(lib.c_str(), flags.c_str());
 
   // Create module
-  return new cu::Module(*context, lib.c_str());
+  return new cu::Module(*context_, lib.c_str());
 }
 
 void InstanceCUDA::compile_kernels() {
@@ -166,7 +162,7 @@ void InstanceCUDA::compile_kernels() {
   cubin.push_back("Adder.cubin");
   std::stringstream flags_adder;
   flags_adder << flags_common;
-  flags_adder << " -DTILE_SIZE_GRID=" << m_tile_size_grid;
+  flags_adder << " -DTILE_SIZE_GRID=" << kTileSizeGrid;
   flags.push_back(flags_adder.str());
 
   // Splitter
@@ -174,7 +170,7 @@ void InstanceCUDA::compile_kernels() {
   cubin.push_back("Splitter.cubin");
   std::stringstream flags_splitter;
   flags_splitter << flags_common;
-  flags_splitter << " -DTILE_SIZE_GRID=" << m_tile_size_grid;
+  flags_splitter << " -DTILE_SIZE_GRID=" << kTileSizeGrid;
   flags.push_back(flags_splitter.str());
 
   // Calibrate
@@ -197,20 +193,13 @@ void InstanceCUDA::compile_kernels() {
   cubin.push_back("KernelWtiling.cubin");
   flags.push_back(flags_common);
 
-// FFT
-#if USE_CUSTOM_FFT
-  src.push_back("KernelFFT.cu");
-  cubin.push_back("FFT.cubin");
-  flags.push_back(flags_common);
-#endif
-
   // Compile all kernels
   for (unsigned i = 0; i < src.size(); i++) {
-    m_modules.push_back(std::unique_ptr<cu::Module>());
+    modules_.push_back(std::unique_ptr<cu::Module>());
   }
 #pragma omp parallel for
   for (unsigned i = 0; i < src.size(); i++) {
-    m_modules[i].reset(compile_kernel(flags[i], src[i], cubin[i]));
+    modules_[i].reset(compile_kernel(flags[i], src[i], cubin[i]));
   }
 }
 
@@ -219,121 +208,112 @@ void InstanceCUDA::load_kernels() {
   unsigned found = 0;
 
   // Load gridder function
-  if (cuModuleGetFunction(&function, *m_modules[0], name_gridder.c_str()) ==
+  if (cuModuleGetFunction(&function, *modules_[0], kNameGridder.c_str()) ==
       CUDA_SUCCESS) {
-    function_gridder.reset(new cu::Function(*context, function));
+    function_gridder_.reset(new cu::Function(*context_, function));
     found++;
   }
 
   // Load degridder function
-  if (cuModuleGetFunction(&function, *m_modules[1], name_degridder.c_str()) ==
+  if (cuModuleGetFunction(&function, *modules_[1], kNameDegridder.c_str()) ==
       CUDA_SUCCESS) {
-    function_degridder.reset(new cu::Function(*context, function));
+    function_degridder_.reset(new cu::Function(*context_, function));
     found++;
   }
 
   // Load scalar function
-  if (cuModuleGetFunction(&function, *m_modules[2], name_scaler.c_str()) ==
+  if (cuModuleGetFunction(&function, *modules_[2], kNameScaler.c_str()) ==
       CUDA_SUCCESS) {
-    function_scaler.reset(new cu::Function(*context, function));
+    function_scaler_.reset(new cu::Function(*context_, function));
     found++;
   }
 
   // Load adder function
-  if (cuModuleGetFunction(&function, *m_modules[3], name_adder.c_str()) ==
+  if (cuModuleGetFunction(&function, *modules_[3], kNameAdder.c_str()) ==
       CUDA_SUCCESS) {
-    function_adder.reset(new cu::Function(*context, function));
+    function_adder_.reset(new cu::Function(*context_, function));
     found++;
   }
 
   // Load splitter function
-  if (cuModuleGetFunction(&function, *m_modules[4], name_splitter.c_str()) ==
+  if (cuModuleGetFunction(&function, *modules_[4], kNameSplitter.c_str()) ==
       CUDA_SUCCESS) {
-    function_splitter.reset(new cu::Function(*context, function));
+    function_splitter_.reset(new cu::Function(*context_, function));
     found++;
   }
 
   // Load calibration functions
-  if (cuModuleGetFunction(&function, *m_modules[5],
-                          name_calibrate_lmnp.c_str()) == CUDA_SUCCESS) {
-    functions_calibrate.emplace_back(new cu::Function(*context, function));
+  if (cuModuleGetFunction(&function, *modules_[5],
+                          kNnameCalibrateLMNP.c_str()) == CUDA_SUCCESS) {
+    functions_calibrate_.emplace_back(new cu::Function(*context_, function));
     found++;
   }
-  if (cuModuleGetFunction(&function, *m_modules[5],
-                          name_calibrate_sums.c_str()) == CUDA_SUCCESS) {
-    functions_calibrate.emplace_back(new cu::Function(*context, function));
+  if (cuModuleGetFunction(&function, *modules_[5],
+                          kNameCalibrateSums.c_str()) == CUDA_SUCCESS) {
+    functions_calibrate_.emplace_back(new cu::Function(*context_, function));
   }
-  if (cuModuleGetFunction(&function, *m_modules[5],
-                          name_calibrate_gradient.c_str()) == CUDA_SUCCESS) {
-    functions_calibrate.emplace_back(new cu::Function(*context, function));
+  if (cuModuleGetFunction(&function, *modules_[5],
+                          kNameCalibrateGradient.c_str()) == CUDA_SUCCESS) {
+    functions_calibrate_.emplace_back(new cu::Function(*context_, function));
   }
-  if (cuModuleGetFunction(&function, *m_modules[5],
-                          name_calibrate_hessian.c_str()) == CUDA_SUCCESS) {
-    functions_calibrate.emplace_back(new cu::Function(*context, function));
+  if (cuModuleGetFunction(&function, *modules_[5],
+                          kNameCalibrateHessian.c_str()) == CUDA_SUCCESS) {
+    functions_calibrate_.emplace_back(new cu::Function(*context_, function));
   }
 
   // Load average beam function
-  if (cuModuleGetFunction(&function, *m_modules[6],
-                          name_average_beam.c_str()) == CUDA_SUCCESS) {
-    function_average_beam.reset(new cu::Function(*context, function));
+  if (cuModuleGetFunction(&function, *modules_[6], kNameAverageBeam.c_str()) ==
+      CUDA_SUCCESS) {
+    function_average_beam_.reset(new cu::Function(*context_, function));
     found++;
   }
 
   // Load FFT shift function
-  if (cuModuleGetFunction(&function, *m_modules[7], name_fft_shift.c_str()) ==
+  if (cuModuleGetFunction(&function, *modules_[7], kNameFftShift.c_str()) ==
       CUDA_SUCCESS) {
-    function_fft_shift.reset(new cu::Function(*context, function));
+    function_fft_shift_.reset(new cu::Function(*context_, function));
     found++;
   }
 
   // Load W-Tiling functions
-  if (cuModuleGetFunction(&function, *m_modules[8], name_copy_tiles.c_str()) ==
+  if (cuModuleGetFunction(&function, *modules_[8], kNameCopyTiles.c_str()) ==
       CUDA_SUCCESS) {
-    functions_wtiling.emplace_back(new cu::Function(*context, function));
+    functions_wtiling_.emplace_back(new cu::Function(*context_, function));
     found++;
   }
-  if (cuModuleGetFunction(&function, *m_modules[8],
-                          name_apply_phasor.c_str()) == CUDA_SUCCESS) {
-    functions_wtiling.emplace_back(new cu::Function(*context, function));
-  }
-  if (cuModuleGetFunction(&function, *m_modules[8],
-                          name_subgrids_to_wtiles.c_str()) == CUDA_SUCCESS) {
-    functions_wtiling.emplace_back(new cu::Function(*context, function));
-  }
-  if (cuModuleGetFunction(&function, *m_modules[8],
-                          name_wtiles_to_grid.c_str()) == CUDA_SUCCESS) {
-    functions_wtiling.emplace_back(new cu::Function(*context, function));
-  }
-  if (cuModuleGetFunction(&function, *m_modules[8],
-                          name_subgrids_from_wtiles.c_str()) == CUDA_SUCCESS) {
-    functions_wtiling.emplace_back(new cu::Function(*context, function));
-  }
-  if (cuModuleGetFunction(&function, *m_modules[8],
-                          name_wtiles_from_grid.c_str()) == CUDA_SUCCESS) {
-    functions_wtiling.emplace_back(new cu::Function(*context, function));
-  }
-  if (cuModuleGetFunction(&function, *m_modules[8],
-                          name_wtiles_to_patch.c_str()) == CUDA_SUCCESS) {
-    functions_wtiling.emplace_back(new cu::Function(*context, function));
-  }
-  if (cuModuleGetFunction(&function, *m_modules[8],
-                          name_wtiles_from_patch.c_str()) == CUDA_SUCCESS) {
-    functions_wtiling.emplace_back(new cu::Function(*context, function));
-  }
-
-// Load FFT function
-#if USE_CUSTOM_FFT
-  if (cuModuleGetFunction(&function, *mModules[8], name_fft.c_str()) ==
+  if (cuModuleGetFunction(&function, *modules_[8], kNameApplyPhasor.c_str()) ==
       CUDA_SUCCESS) {
-    function_fft.reset(new cu::Function(function));
-    found++;
+    functions_wtiling_.emplace_back(new cu::Function(*context_, function));
   }
-#endif
+  if (cuModuleGetFunction(&function, *modules_[8],
+                          kNameSubgridsToWtiles.c_str()) == CUDA_SUCCESS) {
+    functions_wtiling_.emplace_back(new cu::Function(*context_, function));
+  }
+  if (cuModuleGetFunction(&function, *modules_[8], kNameWtilesToGrid.c_str()) ==
+      CUDA_SUCCESS) {
+    functions_wtiling_.emplace_back(new cu::Function(*context_, function));
+  }
+  if (cuModuleGetFunction(&function, *modules_[8],
+                          kNameSubgridsFromWtiles.c_str()) == CUDA_SUCCESS) {
+    functions_wtiling_.emplace_back(new cu::Function(*context_, function));
+  }
+  if (cuModuleGetFunction(&function, *modules_[8],
+                          kNameWtilesFromGrid.c_str()) == CUDA_SUCCESS) {
+    functions_wtiling_.emplace_back(new cu::Function(*context_, function));
+  }
+  if (cuModuleGetFunction(&function, *modules_[8],
+                          kNameWtilesToPatch.c_str()) == CUDA_SUCCESS) {
+    functions_wtiling_.emplace_back(new cu::Function(*context_, function));
+  }
+  if (cuModuleGetFunction(&function, *modules_[8],
+                          kNameWtilesFromPatch.c_str()) == CUDA_SUCCESS) {
+    functions_wtiling_.emplace_back(new cu::Function(*context_, function));
+  }
 
   // Verify that all functions are found
-  if (found != m_modules.size()) {
+  if (found != modules_.size()) {
     std::cerr << "Incorrect number of functions found: " << found
-              << " != " << m_modules.size() << std::endl;
+              << " != " << modules_.size() << std::endl;
     exit(EXIT_FAILURE);
   }
 }
@@ -400,16 +380,16 @@ std::ostream& operator<<(std::ostream& os, InstanceCUDA& d) {
   return os;
 }
 
-State InstanceCUDA::measure() { return m_powersensor->read(); }
+pmt::State InstanceCUDA::measure() { return power_meter_->Read(); }
 
 void InstanceCUDA::measure(PowerRecord& record, cu::Stream& stream) {
-  record.sensor = *m_powersensor;
+  record.sensor = *power_meter_;
   record.enqueue(stream);
 }
 
 cu::Event& InstanceCUDA::get_event() {
   // Create new event
-  cu::Event* event = new cu::Event(*context);
+  cu::Event* event = new cu::Event(*context_);
 
   // This event is used in a callback, where it can not be destroyed
   // after use. Instead, register the event globally, and take care of
@@ -425,10 +405,10 @@ typedef struct {
   PowerRecord* end;
   std::shared_ptr<Report> report;
   Report::ID id;
-  void (Report::*update_report)(State&, State&);
+  void (Report::*update_report)(pmt::State&, pmt::State&);
 } UpdateData;
 
-UpdateData* get_update_data(cu::Event& event, PowerSensor& sensor,
+UpdateData* get_update_data(cu::Event& event, pmt::Pmt& sensor,
                             std::shared_ptr<Report> report, Report::ID id) {
   UpdateData* data = new UpdateData();
   data->start = new PowerRecord(event, sensor);
@@ -452,17 +432,18 @@ void InstanceCUDA::start_measurement(void* ptr) {
   UpdateData* data = (UpdateData*)ptr;
 
   // Schedule the first measurement (prior to kernel execution)
-  data->start->enqueue(*executestream);
+  data->start->enqueue(*stream_execute_);
 }
 
 void InstanceCUDA::end_measurement(void* ptr) {
   UpdateData* data = (UpdateData*)ptr;
 
   // Schedule the second measurement (after the kernel execution)
-  data->end->enqueue(*executestream);
+  data->end->enqueue(*stream_execute_);
 
   // Afterwards, update the report according to the two measurements
-  executestream->addCallback((CUstreamCallback)&update_report_callback, data);
+  stream_execute_->addCallback(
+      static_cast<CUstreamCallback>(&update_report_callback), data);
 }
 
 void InstanceCUDA::launch_gridder(
@@ -470,8 +451,8 @@ void InstanceCUDA::launch_gridder(
     int subgrid_size, float image_size, float w_step, int nr_channels,
     int nr_stations, float shift_l, float shift_m, cu::DeviceMemory& d_uvw,
     cu::DeviceMemory& d_wavenumbers, cu::DeviceMemory& d_visibilities,
-    cu::DeviceMemory& d_spheroidal, cu::DeviceMemory& d_aterms,
-    cu::DeviceMemory& d_aterms_indices, cu::DeviceMemory& d_metadata,
+    cu::DeviceMemory& d_taper, cu::DeviceMemory& d_aterms,
+    cu::DeviceMemory& d_aterm_indices, cu::DeviceMemory& d_metadata,
     cu::DeviceMemory& d_avg_aterm, cu::DeviceMemory& d_subgrid) {
   const void* parameters[] = {&time_offset,
                               &nr_polarizations,
@@ -486,9 +467,9 @@ void InstanceCUDA::launch_gridder(
                               d_uvw.data(),
                               d_wavenumbers.data(),
                               d_visibilities.data(),
-                              d_spheroidal.data(),
+                              d_taper.data(),
                               d_aterms.data(),
-                              d_aterms_indices.data(),
+                              d_aterm_indices.data(),
                               d_metadata.data(),
                               d_avg_aterm.data(),
                               d_subgrid.data()};
@@ -496,12 +477,13 @@ void InstanceCUDA::launch_gridder(
   dim3 grid(nr_subgrids);
   dim3 block(KernelGridder::block_size_x);
   UpdateData* data =
-      get_update_data(get_event(), *m_powersensor, m_report, Report::gridder);
+      get_update_data(get_event(), *power_meter_, report_, Report::gridder);
   start_measurement(data);
 #if ENABLE_REPEAT_KERNELS
   for (int i = 0; i < NR_REPETITIONS_GRIDDER; i++)
 #endif
-    executestream->launchKernel(*function_gridder, grid, block, 0, parameters);
+    stream_execute_->launchKernel(*function_gridder_, grid, block, 0,
+                                  parameters);
   end_measurement(data);
 }
 
@@ -510,8 +492,8 @@ void InstanceCUDA::launch_degridder(
     int subgrid_size, float image_size, float w_step, int nr_channels,
     int nr_stations, float shift_l, float shift_m, cu::DeviceMemory& d_uvw,
     cu::DeviceMemory& d_wavenumbers, cu::DeviceMemory& d_visibilities,
-    cu::DeviceMemory& d_spheroidal, cu::DeviceMemory& d_aterms,
-    cu::DeviceMemory& d_aterms_indices, cu::DeviceMemory& d_metadata,
+    cu::DeviceMemory& d_taper, cu::DeviceMemory& d_aterms,
+    cu::DeviceMemory& d_aterm_indices, cu::DeviceMemory& d_metadata,
     cu::DeviceMemory& d_subgrid) {
   const void* parameters[] = {&time_offset,
                               &nr_polarizations,
@@ -526,9 +508,9 @@ void InstanceCUDA::launch_degridder(
                               d_uvw.data(),
                               d_wavenumbers.data(),
                               d_visibilities.data(),
-                              d_spheroidal.data(),
+                              d_taper.data(),
                               d_aterms.data(),
-                              d_aterms_indices.data(),
+                              d_aterm_indices.data(),
                               d_metadata.data(),
                               d_subgrid.data()};
 
@@ -536,13 +518,13 @@ void InstanceCUDA::launch_degridder(
   dim3 block(KernelDegridder::block_size_x);
 
   UpdateData* data =
-      get_update_data(get_event(), *m_powersensor, m_report, Report::degridder);
+      get_update_data(get_event(), *power_meter_, report_, Report::degridder);
   start_measurement(data);
 #if ENABLE_REPEAT_KERNELS
   for (int i = 0; i < NR_REPETITIONS_GRIDDER; i++)
 #endif
-    executestream->launchKernel(*function_degridder, grid, block, 0,
-                                parameters);
+    stream_execute_->launchKernel(*function_degridder_, grid, block, 0,
+                                  parameters);
   end_measurement(data);
 }
 
@@ -550,22 +532,22 @@ void InstanceCUDA::launch_average_beam(
     int nr_baselines, int nr_antennas, int nr_timesteps, int nr_channels,
     int nr_aterms, int subgrid_size, cu::DeviceMemory& d_uvw,
     cu::DeviceMemory& d_baselines, cu::DeviceMemory& d_aterms,
-    cu::DeviceMemory& d_aterms_offsets, cu::DeviceMemory& d_weights,
+    cu::DeviceMemory& d_aterm_offsets, cu::DeviceMemory& d_weights,
     cu::DeviceMemory& d_average_beam) {
   const void* parameters[] = {
       &nr_antennas,       &nr_timesteps,        &nr_channels,
       &nr_aterms,         &subgrid_size,        d_uvw.data(),
-      d_baselines.data(), d_aterms.data(),      d_aterms_offsets.data(),
+      d_baselines.data(), d_aterms.data(),      d_aterm_offsets.data(),
       d_weights.data(),   d_average_beam.data()};
 
   dim3 grid(nr_baselines);
   dim3 block(128);
 
-  UpdateData* data = get_update_data(get_event(), *m_powersensor, m_report,
+  UpdateData* data = get_update_data(get_event(), *power_meter_, report_,
                                      Report::average_beam);
   start_measurement(data);
-  executestream->launchKernel(*function_average_beam, grid, block, 0,
-                              parameters);
+  stream_execute_->launchKernel(*function_average_beam_, grid, block, 0,
+                                parameters);
   end_measurement(data);
 }
 
@@ -583,20 +565,21 @@ void InstanceCUDA::launch_calibrate(
   dim3 grid(nr_subgrids);
   dim3 block(128);
   UpdateData* data =
-      get_update_data(get_event(), *m_powersensor, m_report, Report::calibrate);
+      get_update_data(get_event(), *power_meter_, report_, Report::calibrate);
   start_measurement(data);
 
   // Get functions
-  std::unique_ptr<cu::Function>& function_lmnp = functions_calibrate[0];
-  std::unique_ptr<cu::Function>& function_sums = functions_calibrate[1];
-  std::unique_ptr<cu::Function>& function_gradient = functions_calibrate[2];
-  std::unique_ptr<cu::Function>& function_hessian = functions_calibrate[3];
+  std::unique_ptr<cu::Function>& function_lmnp = functions_calibrate_[0];
+  std::unique_ptr<cu::Function>& function_sums = functions_calibrate_[1];
+  std::unique_ptr<cu::Function>& function_gradient = functions_calibrate_[2];
+  std::unique_ptr<cu::Function>& function_hessian = functions_calibrate_[3];
 
   // Precompute l,m,n and phase offset
   const void* parameters_lmnp[] = {&grid_size,        &subgrid_size,
                                    &image_size,       &w_step,
                                    d_metadata.data(), d_lmnp.data()};
-  executestream->launchKernel(*function_lmnp, grid, block, 0, parameters_lmnp);
+  stream_execute_->launchKernel(*function_lmnp, grid, block, 0,
+                                parameters_lmnp);
 
   const unsigned int nr_polarizations = 4;
   unsigned int max_nr_terms = 8;
@@ -626,8 +609,8 @@ void InstanceCUDA::launch_calibrate(
                                      d_subgrid.data(),
                                      d_sums1.data(),
                                      d_lmnp.data()};
-    executestream->launchKernel(*function_sums, grid, block, 0,
-                                parameters_sums);
+    stream_execute_->launchKernel(*function_sums, grid, block, 0,
+                                  parameters_sums);
 
     // Compute gradient (diagonal)
     if (term_offset_y == 0) {
@@ -653,8 +636,8 @@ void InstanceCUDA::launch_calibrate(
                                            d_lmnp.data(),
                                            d_gradient.data(),
                                            d_residual.data()};
-      executestream->launchKernel(*function_gradient, grid, block, 0,
-                                  parameters_gradient);
+      stream_execute_->launchKernel(*function_gradient, grid, block, 0,
+                                    parameters_gradient);
     }
 
     // Compute hessian (diagonal)
@@ -664,8 +647,8 @@ void InstanceCUDA::launch_calibrate(
         d_weights.data(),  d_aterm_indices.data(), d_metadata.data(),
         d_sums1.data(),    d_sums1.data(),         d_hessian.data()};
     dim3 block_hessian(current_nr_terms_y, current_nr_terms_y);
-    executestream->launchKernel(*function_hessian, grid, block_hessian, 0,
-                                parameters_hessian1);
+    stream_execute_->launchKernel(*function_hessian, grid, block_hessian, 0,
+                                  parameters_hessian1);
 
     unsigned int current_nr_terms_x = max_nr_terms;
     for (unsigned int term_offset_x = last_term_y;
@@ -694,8 +677,8 @@ void InstanceCUDA::launch_calibrate(
                                        d_subgrid.data(),
                                        d_sums2.data(),
                                        d_lmnp.data()};
-      executestream->launchKernel(*function_sums, grid, block, 0,
-                                  parameters_sums);
+      stream_execute_->launchKernel(*function_sums, grid, block, 0,
+                                    parameters_sums);
 
       // Compute gradient (horizontal offset)
       if (term_offset_y == 0) {
@@ -721,8 +704,8 @@ void InstanceCUDA::launch_calibrate(
                                              d_lmnp.data(),
                                              d_gradient.data(),
                                              d_residual.data()};
-        executestream->launchKernel(*function_gradient, grid, block, 0,
-                                    parameters_gradient);
+        stream_execute_->launchKernel(*function_gradient, grid, block, 0,
+                                      parameters_gradient);
       }
 
       // Compute hessian (horizontal offset)
@@ -732,8 +715,8 @@ void InstanceCUDA::launch_calibrate(
           d_weights.data(),  d_aterm_indices.data(), d_metadata.data(),
           d_sums1.data(),    d_sums2.data(),         d_hessian.data()};
       dim3 block_hessian(current_nr_terms_x, current_nr_terms_y);
-      executestream->launchKernel(*function_hessian, grid, block_hessian, 0,
-                                  parameters_hessian2);
+      stream_execute_->launchKernel(*function_hessian, grid, block_hessian, 0,
+                                    parameters_hessian2);
     }
   }
   end_measurement(data);
@@ -741,18 +724,18 @@ void InstanceCUDA::launch_calibrate(
 
 void InstanceCUDA::launch_grid_fft(cu::DeviceMemory& d_data, int batch,
                                    long grid_size, DomainAtoDomainB direction) {
-  cu::ScopedContext scc(*context);
+  cu::ScopedContext scc(*context_);
 
   int sign =
       (direction == FourierDomainToImageDomain) ? CUFFT_INVERSE : CUFFT_FORWARD;
 
   // Plan FFT
-  cufft::C2C_2D plan(*context, grid_size, grid_size);
-  plan.setStream(*executestream);
+  cufft::C2C_2D plan(*context_, grid_size, grid_size);
+  plan.setStream(*stream_execute_);
 
   // Enqueue start of measurement
   UpdateData* data =
-      get_update_data(get_event(), *m_powersensor, m_report, Report::grid_fft);
+      get_update_data(get_event(), *power_meter_, report_, Report::grid_fft);
   start_measurement(data);
 
 #if ENABLE_REPEAT_KERNELS
@@ -775,50 +758,43 @@ void InstanceCUDA::launch_grid_fft(cu::DeviceMemory& d_data, int batch,
   end_measurement(data);
 }
 
-void InstanceCUDA::plan_subgrid_fft(unsigned size, unsigned nr_polarizations) {
-#if USE_CUSTOM_FFT
-  if (size == 32) {
-    m_fft_subgrid_size = size;
-    return;
-  }
-#endif
-
+void InstanceCUDA::plan_subgrid_fft(size_t size, size_t nr_polarizations) {
   // Force plan (re-)creation if subgrid size changed
-  if (!m_fft_plan_subgrid || size != m_fft_subgrid_size) {
-    m_fft_subgrid_batch = m_fft_subgrid_batch_default;
-    m_fft_plan_subgrid.reset();
-    m_fft_subgrid_size = size;
+  if (!fft_plan_subgrid_ || size != fft_subgrid_size_) {
+    fft_subgrid_batch_ = kFftSubgridBatch;
+    fft_plan_subgrid_.reset();
+    fft_subgrid_size_ = size;
   } else {
     // The subgrid fft was initialized before
     return;
   }
 
   // Amount of device memory free (with a small safety margin)
-  size_t bytes_free = get_free_memory() * 0.95;
+  const size_t bytes_free = get_free_memory() * 0.95;
 
   // Amount of device memory required for temporary subgrids buffer and the FFT
   // plan
-  size_t bytes_required =
-      2 * auxiliary::sizeof_subgrids(m_fft_subgrid_batch, m_fft_subgrid_size,
+  const size_t bytes_required =
+      2 * auxiliary::sizeof_subgrids(fft_subgrid_batch_, fft_subgrid_size_,
                                      nr_polarizations);
 
   // Compute the actual subgrid batch size to use
-  unsigned int fft_subgrid_batch_max = bytes_free / bytes_required;
-  m_fft_subgrid_batch = std::min(m_fft_subgrid_batch, fft_subgrid_batch_max);
+  const size_t fft_subgrid_batch_max = bytes_free / bytes_required;
+  fft_subgrid_batch_ = std::min(fft_subgrid_batch_, fft_subgrid_batch_max);
 
   try {
     // Plan fft
-    unsigned stride = 1;
-    unsigned dist = size * size;
-    m_fft_plan_subgrid.reset(
-        new cufft::C2C_2D(*context, size, size, stride, dist,
-                          m_fft_subgrid_batch * nr_polarizations));
-    m_fft_plan_subgrid->setStream(*executestream);
+    const size_t stride = 1;
+    const size_t dist = size * size;
+    fft_plan_subgrid_.reset(
+        new cufft::C2C_2D(*context_, size, size, stride, dist,
+                          fft_subgrid_batch_ * nr_polarizations));
+    fft_plan_subgrid_->setStream(*stream_execute_);
 
     // Allocate temporary subgrid buffer
-    size_t sizeof_subgrids = auxiliary::sizeof_subgrids(
-        m_fft_subgrid_batch, m_fft_subgrid_size, nr_polarizations);
-    d_fft_subgrid.reset(new cu::DeviceMemory(*context, sizeof_subgrids));
+    const size_t sizeof_subgrids = auxiliary::sizeof_subgrids(
+        fft_subgrid_batch_, fft_subgrid_size_, nr_polarizations);
+    device_subgrid_fft_.reset(new cu::DeviceMemory(*context_, sizeof_subgrids));
   } catch (std::exception& e) {
     // Even though we tried to stay within the amount of available device
     // memory, allocating the fft plan or temporary subgrids buffer failed.
@@ -839,76 +815,39 @@ void InstanceCUDA::launch_subgrid_fft(cu::DeviceMemory& d_data,
   int sign =
       (direction == FourierDomainToImageDomain) ? CUFFT_INVERSE : CUFFT_FORWARD;
 
-#if USE_CUSTOM_FFT
-  if (fft_subgrid_size == 32) {
-    const void* parameters[] = {&data_ptr, &data_ptr, &sign};
-    dim3 block(128);
-    dim3 grid(NR_CORRELATIONS * nr_subgrids);
-    executestream->launchKernel(*function_fft, grid, block, 0, parameters);
-    return;
-  }
-#endif
-
-  cu::ScopedContext scc(*context);
+  cu::ScopedContext scc(*context_);
 
   // Enqueue start of measurement
-  UpdateData* data = get_update_data(get_event(), *m_powersensor, m_report,
-                                     Report::subgrid_fft);
+  UpdateData* data =
+      get_update_data(get_event(), *power_meter_, report_, Report::subgrid_fft);
   start_measurement(data);
 
   // Execute fft in batches
-  for (unsigned s = 0; (s + m_fft_subgrid_batch) <= nr_subgrids;
-       s += m_fft_subgrid_batch) {
-    m_fft_plan_subgrid->execute(data_ptr, data_ptr, sign);
-    data_ptr += m_fft_subgrid_size * m_fft_subgrid_size * nr_polarizations *
-                m_fft_subgrid_batch;
+  for (unsigned s = 0; (s + fft_subgrid_batch_) <= nr_subgrids;
+       s += fft_subgrid_batch_) {
+    fft_plan_subgrid_->execute(data_ptr, data_ptr, sign);
+    data_ptr += fft_subgrid_size_ * fft_subgrid_size_ * nr_polarizations *
+                fft_subgrid_batch_;
   }
 
   // Check for remainder
-  unsigned int fft_subgrid_remainder = nr_subgrids % m_fft_subgrid_batch;
+  unsigned int fft_subgrid_remainder = nr_subgrids % fft_subgrid_batch_;
   if (fft_subgrid_remainder > 0) {
     auto sizeof_subgrids = auxiliary::sizeof_subgrids(
-        fft_subgrid_remainder, m_fft_subgrid_size, nr_polarizations);
-    executestream->memcpyDtoDAsync(*d_fft_subgrid, (CUdeviceptr)data_ptr,
-                                   sizeof_subgrids);
+        fft_subgrid_remainder, fft_subgrid_size_, nr_polarizations);
+    stream_execute_->memcpyDtoDAsync(*device_subgrid_fft_,
+                                     reinterpret_cast<CUdeviceptr>(data_ptr),
+                                     sizeof_subgrids);
     cufftComplex* tmp_ptr = reinterpret_cast<cufftComplex*>(
-        static_cast<CUdeviceptr>(*d_fft_subgrid));
-    m_fft_plan_subgrid->execute(tmp_ptr, tmp_ptr, sign);
-    executestream->memcpyDtoDAsync((CUdeviceptr)data_ptr, (CUdeviceptr)tmp_ptr,
-                                   sizeof_subgrids);
+        static_cast<CUdeviceptr>(*device_subgrid_fft_));
+    fft_plan_subgrid_->execute(tmp_ptr, tmp_ptr, sign);
+    stream_execute_->memcpyDtoDAsync(reinterpret_cast<CUdeviceptr>(data_ptr),
+                                     reinterpret_cast<CUdeviceptr>(tmp_ptr),
+                                     sizeof_subgrids);
   }
 
   // Enqueue end of measurement
   end_measurement(data);
-}
-
-void InstanceCUDA::launch_grid_fft_unified(unsigned long size,
-                                           unsigned int batch,
-                                           cu::UnifiedMemory& u_grid,
-                                           DomainAtoDomainB direction) {
-  cu::ScopedContext scc(*context);
-
-  int sign =
-      (direction == FourierDomainToImageDomain) ? CUFFT_INVERSE : CUFFT_FORWARD;
-
-  cufft::C2C_1D fft_plan_row(*context, size, 1, 1, 1);
-  cufft::C2C_1D fft_plan_col(*context, size, size, 1, 1);
-
-  for (unsigned i = 0; i < batch; i++) {
-    // Execute 1D FFT over all columns
-    for (unsigned col = 0; col < size; col++) {
-      cufftComplex* ptr = static_cast<cufftComplex*>(u_grid.data());
-      ptr += i * size * size + col;
-      fft_plan_row.execute(ptr, ptr, sign);
-    }
-
-    // Execute 1D FFT over all rows
-    for (unsigned row = 0; row < size; row++) {
-      cufftComplex* ptr = static_cast<cufftComplex*>(u_grid.data());
-      ptr += i * size * size + row * size;
-      fft_plan_col.execute(ptr, ptr, sign);
-    }
-  }
 }
 
 void InstanceCUDA::launch_fft_shift(cu::DeviceMemory& d_data, int batch,
@@ -919,9 +858,10 @@ void InstanceCUDA::launch_fft_shift(cu::DeviceMemory& d_data, int batch,
   dim3 block(128);
 
   UpdateData* data =
-      get_update_data(get_event(), *m_powersensor, m_report, Report::fft_shift);
+      get_update_data(get_event(), *power_meter_, report_, Report::fft_shift);
   start_measurement(data);
-  executestream->launchKernel(*function_fft_shift, grid, block, 0, parameters);
+  stream_execute_->launchKernel(*function_fft_shift_, grid, block, 0,
+                                parameters);
   end_measurement(data);
 }
 
@@ -937,12 +877,12 @@ void InstanceCUDA::launch_adder(int nr_subgrids, int nr_polarizations,
   dim3 grid(nr_subgrids);
   dim3 block(128);
   UpdateData* data =
-      get_update_data(get_event(), *m_powersensor, m_report, Report::adder);
+      get_update_data(get_event(), *power_meter_, report_, Report::adder);
   start_measurement(data);
 #if ENABLE_REPEAT_KERNELS
   for (int i = 0; i < NR_REPETITIONS_ADDER; i++)
 #endif
-    executestream->launchKernel(*function_adder, grid, block, 0, parameters);
+    stream_execute_->launchKernel(*function_adder_, grid, block, 0, parameters);
   end_measurement(data);
 }
 
@@ -950,19 +890,18 @@ void InstanceCUDA::launch_adder_unified(int nr_subgrids, long grid_size,
                                         int subgrid_size,
                                         cu::DeviceMemory& d_metadata,
                                         cu::DeviceMemory& d_subgrid,
-                                        cu::UnifiedMemory& u_grid) {
-  CUdeviceptr grid_ptr = u_grid;
+                                        void* u_grid) {
   bool enable_tiling = true;
   const int nr_polarizations = 4;
   const void* parameters[] = {
       &nr_polarizations, &grid_size, &subgrid_size, d_metadata.data(),
-      d_subgrid.data(),  &grid_ptr,  &enable_tiling};
+      d_subgrid.data(),  &u_grid,    &enable_tiling};
   dim3 grid(nr_subgrids);
   dim3 block(128);
   UpdateData* data =
-      get_update_data(get_event(), *m_powersensor, m_report, Report::adder);
+      get_update_data(get_event(), *power_meter_, report_, Report::adder);
   start_measurement(data);
-  executestream->launchKernel(*function_adder, grid, block, 0, parameters);
+  stream_execute_->launchKernel(*function_adder_, grid, block, 0, parameters);
   end_measurement(data);
 }
 
@@ -978,12 +917,13 @@ void InstanceCUDA::launch_splitter(int nr_subgrids, int nr_polarizations,
   dim3 grid(nr_subgrids);
   dim3 block(128);
   UpdateData* data =
-      get_update_data(get_event(), *m_powersensor, m_report, Report::splitter);
+      get_update_data(get_event(), *power_meter_, report_, Report::splitter);
   start_measurement(data);
 #if ENABLE_REPEAT_KERNELS
   for (int i = 0; i < NR_REPETITIONS_ADDER; i++)
 #endif
-    executestream->launchKernel(*function_splitter, grid, block, 0, parameters);
+    stream_execute_->launchKernel(*function_splitter_, grid, block, 0,
+                                  parameters);
   end_measurement(data);
 }
 
@@ -991,19 +931,19 @@ void InstanceCUDA::launch_splitter_unified(int nr_subgrids, long grid_size,
                                            int subgrid_size,
                                            cu::DeviceMemory& d_metadata,
                                            cu::DeviceMemory& d_subgrid,
-                                           cu::UnifiedMemory& u_grid) {
-  CUdeviceptr grid_ptr = u_grid;
+                                           void* u_grid) {
   const bool enable_tiling = true;
   const int nr_polarizations = 4;
   const void* parameters[] = {
       &nr_polarizations, &grid_size, &subgrid_size, d_metadata.data(),
-      d_subgrid.data(),  &grid_ptr,  &enable_tiling};
+      d_subgrid.data(),  &u_grid,    &enable_tiling};
   dim3 grid(nr_subgrids);
   dim3 block(128);
   UpdateData* data =
-      get_update_data(get_event(), *m_powersensor, m_report, Report::splitter);
+      get_update_data(get_event(), *power_meter_, report_, Report::splitter);
   start_measurement(data);
-  executestream->launchKernel(*function_splitter, grid, block, 0, parameters);
+  stream_execute_->launchKernel(*function_splitter_, grid, block, 0,
+                                parameters);
   end_measurement(data);
 }
 
@@ -1015,9 +955,9 @@ void InstanceCUDA::launch_scaler(int nr_subgrids, int nr_polarizations,
   dim3 grid(nr_subgrids);
   dim3 block(128);
   UpdateData* data =
-      get_update_data(get_event(), *m_powersensor, m_report, Report::fft_scale);
+      get_update_data(get_event(), *power_meter_, report_, Report::fft_scale);
   start_measurement(data);
-  executestream->launchKernel(*function_scaler, grid, block, 0, parameters);
+  stream_execute_->launchKernel(*function_scaler_, grid, block, 0, parameters);
   end_measurement(data);
 }
 
@@ -1031,8 +971,8 @@ void InstanceCUDA::launch_copy_tiles(
                               d_src_tiles.data(),    d_dst_tiles.data()};
   dim3 grid(nr_polarizations, nr_tiles);
   dim3 block(128);
-  executestream->launchKernel(*functions_wtiling[0], grid, block, 0,
-                              parameters);
+  stream_execute_->launchKernel(*functions_wtiling_[0], grid, block, 0,
+                                parameters);
 }
 
 void InstanceCUDA::launch_apply_phasor_to_wtiles(
@@ -1045,8 +985,8 @@ void InstanceCUDA::launch_apply_phasor_to_wtiles(
                               &sign};
   dim3 grid(nr_polarizations, nr_tiles);
   dim3 block(128);
-  executestream->launchKernel(*functions_wtiling[1], grid, block, 0,
-                              parameters);
+  stream_execute_->launchKernel(*functions_wtiling_[1], grid, block, 0,
+                                parameters);
 }
 
 void InstanceCUDA::launch_adder_subgrids_to_wtiles(
@@ -1060,27 +1000,26 @@ void InstanceCUDA::launch_adder_subgrids_to_wtiles(
       d_subgrid.data(),  d_tiles.data(),  &scale};
   dim3 grid(nr_subgrids);
   dim3 block(128);
-  executestream->launchKernel(*functions_wtiling[2], grid, block, 0,
-                              parameters);
+  stream_execute_->launchKernel(*functions_wtiling_[2], grid, block, 0,
+                                parameters);
 }
 
 void InstanceCUDA::launch_adder_wtiles_to_grid(
     int nr_polarizations, int nr_tiles, long grid_size, int tile_size,
     int padded_tile_size, cu::DeviceMemory& d_tile_ids,
     cu::DeviceMemory& d_tile_coordinates, cu::DeviceMemory& d_tiles,
-    cu::UnifiedMemory& u_grid) {
-  CUdeviceptr grid_ptr = u_grid;
+    void* u_grid) {
   const void* parameters[] = {&grid_size,
                               &tile_size,
                               &padded_tile_size,
                               d_tile_ids.data(),
                               d_tile_coordinates.data(),
                               d_tiles.data(),
-                              &grid_ptr};
+                              &u_grid};
   dim3 grid(nr_polarizations, nr_tiles);
   dim3 block(128);
-  executestream->launchKernel(*functions_wtiling[3], grid, block, 0,
-                              parameters);
+  stream_execute_->launchKernel(*functions_wtiling_[3], grid, block, 0,
+                                parameters);
 }
 
 void InstanceCUDA::launch_splitter_subgrids_from_wtiles(
@@ -1092,27 +1031,26 @@ void InstanceCUDA::launch_splitter_subgrids_from_wtiles(
       &subgrid_offset,   d_metadata.data(), d_subgrid.data(), d_tiles.data()};
   dim3 grid(nr_subgrids);
   dim3 block(128);
-  executestream->launchKernel(*functions_wtiling[4], grid, block, 0,
-                              parameters);
+  stream_execute_->launchKernel(*functions_wtiling_[4], grid, block, 0,
+                                parameters);
 }
 
 void InstanceCUDA::launch_splitter_wtiles_from_grid(
     int nr_polarizations, int nr_tiles, long grid_size, int tile_size,
     int padded_tile_size, cu::DeviceMemory& d_tile_ids,
     cu::DeviceMemory& d_tile_coordinates, cu::DeviceMemory& d_tiles,
-    cu::UnifiedMemory& u_grid) {
-  CUdeviceptr grid_ptr = u_grid;
+    void* u_grid) {
   const void* parameters[] = {&grid_size,
                               &tile_size,
                               &padded_tile_size,
                               d_tile_ids.data(),
                               d_tile_coordinates.data(),
                               d_tiles.data(),
-                              &grid_ptr};
+                              &u_grid};
   dim3 grid(nr_polarizations, nr_tiles);
   dim3 block(128);
-  executestream->launchKernel(*functions_wtiling[5], grid, block, 0,
-                              parameters);
+  stream_execute_->launchKernel(*functions_wtiling_[5], grid, block, 0,
+                                parameters);
 }
 
 void InstanceCUDA::launch_adder_wtiles_to_patch(
@@ -1127,8 +1065,8 @@ void InstanceCUDA::launch_adder_wtiles_to_patch(
                               d_tiles.data(),    d_patch.data()};
   dim3 grid(nr_polarizations, patch_size);
   dim3 block(128);
-  executestream->launchKernel(*functions_wtiling[6], grid, block, 0,
-                              parameters);
+  stream_execute_->launchKernel(*functions_wtiling_[6], grid, block, 0,
+                                parameters);
 }
 
 void InstanceCUDA::launch_splitter_wtiles_from_patch(
@@ -1143,8 +1081,8 @@ void InstanceCUDA::launch_splitter_wtiles_from_patch(
                               d_tiles.data(),    d_patch.data()};
   dim3 grid(nr_polarizations, patch_size);
   dim3 block(128);
-  executestream->launchKernel(*functions_wtiling[7], grid, block, 0,
-                              parameters);
+  stream_execute_->launchKernel(*functions_wtiling_[7], grid, block, 0,
+                                parameters);
 }
 
 typedef struct {
@@ -1177,7 +1115,7 @@ ReportData* get_report_data(int nr_polarizations, int nr_timesteps,
 void InstanceCUDA::enqueue_report(cu::Stream& stream, int nr_polarizations,
                                   int nr_timesteps, int nr_subgrids) {
   ReportData* data =
-      get_report_data(nr_polarizations, nr_timesteps, nr_subgrids, m_report);
+      get_report_data(nr_polarizations, nr_timesteps, nr_subgrids, report_);
   stream.addCallback((CUstreamCallback)&report_job, data);
 }
 
@@ -1190,23 +1128,23 @@ void InstanceCUDA::free_events() { events.clear(); }
  * FFT plan destructor
  */
 void InstanceCUDA::free_subgrid_fft() {
-  m_fft_subgrid_batch = 0;
-  m_fft_subgrid_size = 0;
-  m_fft_plan_subgrid.reset();
-  d_fft_subgrid.reset();
+  fft_subgrid_batch_ = 0;
+  fft_subgrid_size_ = 0;
+  fft_plan_subgrid_.reset();
+  device_subgrid_fft_.reset();
 }
 
 /*
  * Reset device
  */
 void InstanceCUDA::reset() {
-  executestream.reset();
-  htodstream.reset();
-  dtohstream.reset();
-  context.reset(new cu::Context(*device));
-  executestream.reset(new cu::Stream(*context));
-  htodstream.reset(new cu::Stream(*context));
-  dtohstream.reset(new cu::Stream(*context));
+  stream_execute_.reset();
+  stream_htod_.reset();
+  stream_dtoh_.reset();
+  context_.reset(new cu::Context(*device_));
+  stream_execute_.reset(new cu::Stream(*context_));
+  stream_htod_.reset(new cu::Stream(*context_));
+  stream_dtoh_.reset(new cu::Stream(*context_));
 }
 
 /*
@@ -1216,11 +1154,11 @@ void InstanceCUDA::print_device_memory_info() const {
 #if defined(DEBUG)
   std::cout << "InstanceCUDA::" << __func__ << std::endl;
 #endif
-  cu::ScopedContext scc(*context);
+  cu::ScopedContext scc(*context_);
   auto memory_total =
-      device->get_total_memory() / ((float)1024 * 1024 * 1024);  // GBytes
+      device_->get_total_memory() / (float(1024) * 1024 * 1024);  // GBytes
   auto memory_free =
-      device->get_free_memory() / ((float)1024 * 1024 * 1024);  // GBytes
+      device_->get_free_memory() / (float(1024) * 1024 * 1024);  // GBytes
   auto memory_used = memory_total - memory_free;
   std::clog << "Device memory -> ";
   std::clog << "total: " << memory_total << " Gb, ";
@@ -1229,21 +1167,19 @@ void InstanceCUDA::print_device_memory_info() const {
 }
 
 size_t InstanceCUDA::get_free_memory() const {
-  cu::ScopedContext scc(*context);
-  return device->get_free_memory();
+  cu::ScopedContext scc(*context_);
+  return device_->get_free_memory();
 }
 
 size_t InstanceCUDA::get_total_memory() const {
-  cu::ScopedContext scc(*context);
-  return device->get_total_memory();
+  cu::ScopedContext scc(*context_);
+  return device_->get_total_memory();
 }
 
 template <CUdevice_attribute attribute>
 int InstanceCUDA::get_attribute() const {
-  cu::ScopedContext scc(*context);
-  return device->get_attribute<attribute>();
+  cu::ScopedContext scc(*context_);
+  return device_->get_attribute<attribute>();
 }
 
-}  // end namespace cuda
-}  // end namespace kernel
-}  // end namespace idg
+}  // end namespace idg::kernel::cuda

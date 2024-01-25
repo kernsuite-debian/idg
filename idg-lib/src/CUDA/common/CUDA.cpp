@@ -4,7 +4,6 @@
 #include <string>
 
 #include <cuda.h>
-#include <cudaProfiler.h>
 
 #include "CUDA.h"
 
@@ -16,8 +15,7 @@ namespace idg {
 namespace proxy {
 namespace cuda {
 CUDA::CUDA(ProxyInfo info)
-    : hostPowerSensor(powersensor::get_power_sensor(powersensor::sensor_host)),
-      mInfo(info) {
+    : power_meter_(pmt::get_power_meter(pmt::sensor_host)), mInfo(info) {
 #if defined(DEBUG)
   std::cout << "CUDA::" << __func__ << std::endl;
 #endif
@@ -26,15 +24,14 @@ CUDA::CUDA(ProxyInfo info)
   init_devices();
   print_devices();
   print_compiler_flags();
-  cuProfilerStart();
 };
 
 CUDA::~CUDA() {
-  cuProfilerStop();
   // CUDA memory should be free'ed before CUDA devices and
   // contexts are free'ed, hence the explicit calls here.
   free_unified_grid();
   free_buffers_wtiling();
+  free_memory();
 }
 
 void CUDA::init_devices() {
@@ -105,12 +102,12 @@ std::unique_ptr<auxiliary::Memory> CUDA::allocate_memory(size_t bytes) {
   return std::unique_ptr<auxiliary::Memory>(new cu::HostMemory(context, bytes));
 }
 
-int CUDA::initialize_jobs(const int nr_baselines, const int nr_timesteps,
-                          const int nr_channels, const int subgrid_size,
-                          const size_t bytes_free, const Plan& plan,
-                          const Array4D<std::complex<float>>& visibilities,
-                          const Array2D<UVW<float>>& uvw,
-                          std::vector<JobData>& jobs) const {
+int CUDA::initialize_jobs(
+    const int nr_baselines, const int nr_timesteps, const int nr_channels,
+    const int subgrid_size, const size_t bytes_free, const Plan& plan,
+    const aocommon::xt::Span<std::complex<float>, 4>& visibilities,
+    const aocommon::xt::Span<UVW<float>, 2>& uvw,
+    std::vector<JobData>& jobs) const {
   int jobsize = 0;
   size_t bytes_required = 0;
 
@@ -146,8 +143,9 @@ int CUDA::initialize_jobs(const int nr_baselines, const int nr_timesteps,
     job.current_nr_timesteps =
         plan.get_nr_timesteps(first_bl, current_nr_baselines);
     job.metadata_ptr = plan.get_metadata_ptr(first_bl);
-    job.uvw_ptr = uvw.data(first_bl, 0);
-    job.visibilities_ptr = visibilities.data(first_bl, 0, 0, 0);
+    job.uvw_ptr = &uvw(first_bl, 0);
+    job.visibilities_ptr =
+        const_cast<std::complex<float>*>(&visibilities(first_bl, 0, 0, 0));
     jobs.push_back(job);
   }
 
@@ -161,13 +159,7 @@ void CUDA::free_buffers_wtiling() {
   m_buffers_wtiling.d_patches.clear();
 }
 
-cu::UnifiedMemory& CUDA::allocate_unified_grid(const cu::Context& context,
-                                               size_t size) {
-  u_grid_.reset(new cu::UnifiedMemory(context, size));
-  return *u_grid_;
-}
-
-void CUDA::free_unified_grid() { u_grid_.reset(); }
+void CUDA::free_unified_grid() { unified_grid_.Reset(); }
 
 }  // end namespace cuda
 }  // end namespace proxy

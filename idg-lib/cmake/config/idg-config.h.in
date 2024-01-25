@@ -20,7 +20,6 @@
 
 #cmakedefine BUILD_LIB_CPU
 #cmakedefine BUILD_LIB_CUDA
-#cmakedefine BUILD_LIB_OPENCL
 #cmakedefine BUILD_WITH_PYTHON
 #cmakedefine PERFORMANCE_REPORT
 #cmakedefine COMPILE_VERBOSE
@@ -40,7 +39,7 @@
 #define FFTW3_LIB "@FFTW3_LIBRARY@"
 #define FFTW3F_LIB "@FFTW3F_LIBRARY@"
 
-#cmakedefine HAVE_POWERSENSOR
+#cmakedefine HAVE_PMT
 
 #cmakedefine REGISTER_HOST_MEMORY
 

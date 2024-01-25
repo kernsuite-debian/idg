@@ -10,12 +10,15 @@
 #include <cstring>
 #include <utility>  // pair
 
+#include <aocommon/xt/span.h>
+
 #include "RuntimeWrapper.h"
 #include "ProxyInfo.h"
 #include "Types.h"
 #include "Plan.h"
 #include "Report.h"
 #include "Exception.h"
+#include "Tensor.h"
 
 namespace idg {
 enum DomainAtoDomainB {
@@ -65,21 +68,22 @@ class Proxy {
    * floats. The axes are time slot, station, subgrid x, subgrid y. A time slot
    * is a range of time samples over which the aterms are constant The time
    * slots are defined by the aterm_offsets parameters.
-   * @param[in] aterms_offsets A one dimensional array of time indices (ints)
+   * @param[in] aterm_offsets A one dimensional array of time indices (ints)
    * that represent the time ranges of time slots. The array is one longer than
    * the number of time slots. Time slot k is valid from aterm_offsets[k] until
    * aterm_offsets[k+1].
    * @param[in] taper A two dimensional array of floats of the size of a
    * subgrid.
    */
-
-  void gridding(const Plan& plan, const Array1D<float>& frequencies,
-                const Array4D<std::complex<float>>& visibilities,
-                const Array2D<UVW<float>>& uvw,
-                const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
-                const Array4D<Matrix2x2<std::complex<float>>>& aterms,
-                const Array1D<unsigned int>& aterms_offsets,
-                const Array2D<float>& taper);
+  void gridding(
+      const Plan& plan, const aocommon::xt::Span<float, 1>& frequencies,
+      const aocommon::xt::Span<std::complex<float>, 4>& visibilities,
+      const aocommon::xt::Span<UVW<float>, 2>& uvw,
+      const aocommon::xt::Span<std::pair<unsigned int, unsigned int>, 1>&
+          baselines,
+      const aocommon::xt::Span<Matrix2x2<std::complex<float>>, 4>& aterms,
+      const aocommon::xt::Span<unsigned int, 1>& aterm_offsets,
+      const aocommon::xt::Span<float, 2>& taper);
 
   /**
    * @brief Degrid (predict) visibilities, applying A-terms.
@@ -105,7 +109,7 @@ class Proxy {
    * floats. The axes are time slot, station, subgrid x, subgrid y. A time slot
    * is a range of time samples over which the aterms are constant The time
    * slots are defined by the aterm_offsets parameters.
-   * @param[in] aterms_offsets A one dimensional array of time indices (ints)
+   * @param[in] aterm_offsets A one dimensional array of time indices (ints)
    * that represent the time ranges of time slots. The array is one longer than
    * the number of time slots. Time slot k is valid from aterm_offsets[k] until
    * aterm_offsets[k+1].
@@ -113,12 +117,14 @@ class Proxy {
    * subgrid.
    */
   void degridding(
-      const Plan& plan, const Array1D<float>& frequencies,
-      Array4D<std::complex<float>>& visibilities,
-      const Array2D<UVW<float>>& uvw,
-      const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
-      const Array4D<Matrix2x2<std::complex<float>>>& aterms,
-      const Array1D<unsigned int>& aterms_offsets, const Array2D<float>& taper);
+      const Plan& plan, const aocommon::xt::Span<float, 1>& frequencies,
+      aocommon::xt::Span<std::complex<float>, 4>& visibilities,
+      const aocommon::xt::Span<UVW<float>, 2>& uvw,
+      const aocommon::xt::Span<std::pair<unsigned int, unsigned int>, 1>&
+          baselines,
+      const aocommon::xt::Span<Matrix2x2<std::complex<float>>, 4>& aterms,
+      const aocommon::xt::Span<unsigned int, 1>& aterm_offsets,
+      const aocommon::xt::Span<float, 2>& taper);
 
   /**
    * @brief Prepare a calibration cycle
@@ -139,7 +145,7 @@ class Proxy {
    * floats). The axes are baseline and time.
    * @param[in] baselines A one dimensional array of pairs station indices
    * (integers) comprising a baseline.
-   * @param[in] aterms_offsets A one dimensional array of time indices (ints)
+   * @param[in] aterm_offsets A one dimensional array of time indices (ints)
    * that represent the time ranges of time slots. The array is one longer than
    * the number of time slots. Time slot k is valid from aterm_offsets[k] until
    * aterm_offsets[k+1].
@@ -147,15 +153,19 @@ class Proxy {
    * subgrid.
    */
   void calibrate_init(
-      const unsigned int kernel_size, const Array2D<float>& frequencies,
-      Array4D<std::complex<float>>& visibilities, Array4D<float>& weights,
-      const Array2D<UVW<float>>& uvw,
-      const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
-      const Array1D<unsigned int>& aterms_offsets, const Array2D<float>& taper);
+      const unsigned int kernel_size,
+      const aocommon::xt::Span<float, 2>& frequencies,
+      aocommon::xt::Span<std::complex<float>, 4>& visibilities,
+      aocommon::xt::Span<float, 4>& weights,
+      const aocommon::xt::Span<UVW<float>, 2>& uvw,
+      const aocommon::xt::Span<std::pair<unsigned int, unsigned int>, 1>&
+          baselines,
+      const aocommon::xt::Span<unsigned int, 1>& aterm_offsets,
+      const aocommon::xt::Span<float, 2>& taper);
 
   /**
    * @brief Compute a hessian, gradient and residual per time slot for station
-   * station_nr, given the current aterms and derivative aterms.
+   * antenna_nr, given the current aterms and derivative aterms.
    *
    * The calibration functions provided by the Proxy do not implement a full
    * solving strategy. They are intended to be called by an iterative solver to
@@ -166,7 +176,7 @@ class Proxy {
    * by a model with a number of unknown parameters.
    *
    * The aterm_derivatives are the derivatives of the aterm of station
-   * station_nr with respect to the unknowns.
+   * antenna_nr with respect to the unknowns.
    *
    * The values returned are
    * 1) the residual, the root mean square (TODO check, maybe it is the sum
@@ -176,12 +186,12 @@ class Proxy {
    * derivative of the residual with respect to the unknowns 3) the derivative
    * of the gradient with respect to the unknowns
    *
-   * @param[in] station_nr
+   * @param[in] antenna_nr
    * @param[in] aterms Five dimensional array of 2x2 (Jones) matrices of complex
    * floats. The axes are channel block, time slot, station, subgrid x, subgrid
    * y. A time slot is a range of time samples over which the aterms are
    * constant The time slots are defined by the aterm_offsets parameters.
-   * @param[in] derivative_aterms Five dimensional array of 2x2 (Jones) matrices
+   * @param[in] aterm_derivatives Five dimensional array of 2x2 (Jones) matrices
    * of complex floats. The axes are channel block, time slot, terms, subgrid x,
    * subgrid y.
    *
@@ -191,11 +201,13 @@ class Proxy {
    * @param[out] residual
    */
   void calibrate_update(
-      const int station_nr,
-      const Array5D<Matrix2x2<std::complex<float>>>& aterms,
-      const Array5D<Matrix2x2<std::complex<float>>>& derivative_aterms,
-      Array4D<double>& hessian, Array3D<double>& gradient,
-      Array1D<double>& residual);
+      const int antenna_nr,
+      const aocommon::xt::Span<Matrix2x2<std::complex<float>>, 5>& aterms,
+      const aocommon::xt::Span<Matrix2x2<std::complex<float>>, 5>&
+          aterm_derivatives,
+      aocommon::xt::Span<double, 4>& hessian,
+      aocommon::xt::Span<double, 3>& gradient,
+      aocommon::xt::Span<double, 1>& residual);
 
   /**
    * @brief Clean up after calibration cycle.
@@ -217,7 +229,7 @@ class Proxy {
    * @param[in] uvw
    * @param[in] baselines
    * @param[in] aterms
-   * @param[in] aterms_offsets
+   * @param[in] aterm_offsets
    * @param[in] weights
    * @param[out] average_beam Four dimensional array of complex floats.
    *                          The axes are subgrid x, subgrid y, mueller matrix
@@ -225,12 +237,13 @@ class Proxy {
    */
   virtual void compute_avg_beam(
       const unsigned int nr_antennas, const unsigned int nr_channels,
-      const Array2D<UVW<float>>& uvw,
-      const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
-      const Array4D<Matrix2x2<std::complex<float>>>& aterms,
-      const Array1D<unsigned int>& aterms_offsets,
-      const Array4D<float>& weights,
-      idg::Array4D<std::complex<float>>& average_beam);
+      const aocommon::xt::Span<UVW<float>, 2>& uvw,
+      const aocommon::xt::Span<std::pair<unsigned int, unsigned int>, 1>&
+          baselines,
+      const aocommon::xt::Span<Matrix2x2<std::complex<float>>, 4>& aterms,
+      const aocommon::xt::Span<unsigned int, 1>& aterm_offsets,
+      const aocommon::xt::Span<float, 4>& weights,
+      aocommon::xt::Span<std::complex<float>, 4>& average_beam);
 
   //! Methods for querying and disabling Proxy capabilities
   bool supports_wstacking() {
@@ -246,62 +259,61 @@ class Proxy {
   }
 
   void set_avg_aterm_correction(
-      const Array4D<std::complex<float>>& avg_aterm_correction);
+      const aocommon::xt::Span<std::complex<float>, 4>& avg_aterm_correction);
   void unset_avg_aterm_correction();
 
   //! Methods for memory management
   virtual std::unique_ptr<auxiliary::Memory> allocate_memory(size_t bytes);
 
-  template <typename T>
-  Array1D<T> allocate_array1d(size_t a_dim) {
-    auto bytes = a_dim * sizeof(T);
-    return Array1D<T>(allocate_memory(bytes), a_dim);
-  };
+  template <typename T, size_t Dimensions>
+  Tensor<T, Dimensions> allocate_tensor(
+      const std::initializer_list<size_t> shape) {
+    assert(shape.size() == Dimensions);
+    std::array<size_t, Dimensions> shape_array;
+    size_t bytes = sizeof(T);
+    for (size_t i = 0; i < shape.size(); i++) {
+      const size_t dimension = *(shape.begin() + i);
+      shape_array[i] = dimension;
+      bytes *= dimension;
+    }
+    return Tensor<T, Dimensions>(allocate_memory(bytes), shape_array);
+  }
 
-  template <typename T>
-  Array2D<T> allocate_array2d(size_t b_dim, size_t a_dim) {
-    auto bytes = a_dim * b_dim * sizeof(T);
-    return Array2D<T>(allocate_memory(bytes), b_dim, a_dim);
-  };
-
-  template <typename T>
-  Array3D<T> allocate_array3d(size_t c_dim, size_t b_dim, size_t a_dim) {
-    auto bytes = a_dim * b_dim * c_dim * sizeof(T);
-    return Array3D<T>(allocate_memory(bytes), c_dim, b_dim, a_dim);
-  };
-
-  template <typename T>
-  Array4D<T> allocate_array4d(size_t d_dim, size_t c_dim, size_t b_dim,
-                              size_t a_dim) {
-    auto bytes = a_dim * b_dim * c_dim * d_dim * sizeof(T);
-    return Array4D<T>(allocate_memory(bytes), d_dim, c_dim, b_dim, a_dim);
-  };
-
-  //! Methods for grid management
-  virtual std::shared_ptr<Grid> allocate_grid(size_t nr_w_layers,
-                                              size_t nr_correlations,
-                                              size_t height, size_t width);
+  template <typename T, size_t Dimensions>
+  aocommon::xt::Span<T, Dimensions> allocate_span(
+      const std::initializer_list<size_t> shape) {
+    assert(shape.size() == Dimensions);
+    std::array<size_t, Dimensions> shape_array;
+    size_t bytes = sizeof(T);
+    for (size_t i = 0; i < shape.size(); i++) {
+      const size_t dimension = *(shape.begin() + i);
+      shape_array[i] = dimension;
+      bytes *= dimension;
+    }
+    std::unique_ptr<auxiliary::Memory> memory = allocate_memory(bytes);
+    T* ptr = reinterpret_cast<T*>(memory->data());
+    memory_.push_back(std::move(memory));
+    return aocommon::xt::CreateSpan(ptr, shape_array);
+  }
 
   /**
    * Set grid to be used for gridding, degridding or calibration.
    */
-  virtual void set_grid(std::shared_ptr<Grid> grid);
+  virtual void set_grid(aocommon::xt::Span<std::complex<float>, 4>& grid);
   virtual void free_grid();
 
   /**
    * @brief Flush all pending operations and return the final grid.
+   * @return aocommon::xt::Span<std::complex<float>
    */
-  virtual std::shared_ptr<Grid> get_final_grid();
+  virtual aocommon::xt::Span<std::complex<float>, 4>& get_final_grid();
 
   /**
    * @brief Get the current grid without flushing pending operations.
    *
-   * Use this function for reading the grid dimensions, and not the grid
-   * data.
-   *
-   * @return const Grid&
+   * @return aocommon::xt::Span<std::complex<float>
    */
-  const Grid& get_grid() const { return *m_grid; }
+  aocommon::xt::Span<std::complex<float>, 4>& get_grid() { return grid_; }
 
   //! Methods for cache management
 
@@ -321,12 +333,11 @@ class Proxy {
    * @param shift
    */
   virtual void init_cache(int subgrid_size, float cell_size, float w_step,
-                          const Array1D<float>& shift) {
+                          const std::array<float, 2>& shift) {
     m_cache_state.subgrid_size = subgrid_size;
     m_cache_state.cell_size = cell_size;
     m_cache_state.w_step = w_step;
-    m_cache_state.shift(0) = shift(0);
-    m_cache_state.shift(1) = shift(1);
+    m_cache_state.shift = shift;
   };
 
   // The cache needs to have been initialized by call to init_cache first
@@ -344,7 +355,7 @@ class Proxy {
    * floats). The axes are baseline and time.
    * @param[in] baselines A one dimensional array of pairs station indices
    * (integers) comprising a baseline.
-   * @param[in] aterms_offsets A one dimensional array of time indices (ints)
+   * @param[in] aterm_offsets A one dimensional array of time indices (ints)
    * that represent the time ranges of time slots. The array is one longer than
    * the number of time slots. Time slot k is valid from aterm_offsets[k] until
    * aterm_offsets[k+1].
@@ -352,57 +363,64 @@ class Proxy {
    * @return std::unique_ptr<Plan>
    */
   virtual std::unique_ptr<Plan> make_plan(
-      const int kernel_size, const Array1D<float>& frequencies,
-      const Array2D<UVW<float>>& uvw,
-      const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
-      const Array1D<unsigned int>& aterms_offsets,
+      const int kernel_size, const aocommon::xt::Span<float, 1>& frequencies,
+      const aocommon::xt::Span<UVW<float>, 2>& uvw,
+      const aocommon::xt::Span<std::pair<unsigned int, unsigned int>, 1>&
+          baselines,
+      const aocommon::xt::Span<unsigned int, 1>& aterm_offsets,
       Plan::Options options = Plan::Options()) {
     options.w_step = m_cache_state.w_step;
-    return std::unique_ptr<Plan>(
-        new Plan(kernel_size, m_cache_state.subgrid_size, m_grid->get_y_dim(),
-                 m_cache_state.cell_size, m_cache_state.shift, frequencies, uvw,
-                 baselines, aterms_offsets, options));
+    const size_t grid_size = get_grid().shape(2);
+    assert(get_grid().shape(3) == grid_size);
+    return std::make_unique<Plan>(kernel_size, m_cache_state.subgrid_size,
+                                  grid_size, m_cache_state.cell_size,
+                                  m_cache_state.shift, frequencies, uvw,
+                                  baselines, aterm_offsets, options);
   }
 
  private:
   //! Degrid the visibilities from a uniform grid
   virtual void do_gridding(
-      const Plan& plan, const Array1D<float>& frequencies,
-      const Array4D<std::complex<float>>& visibilities,
-      const Array2D<UVW<float>>& uvw,
-      const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
-      const Array4D<Matrix2x2<std::complex<float>>>& aterms,
-      const Array1D<unsigned int>& aterms_offsets,
-      const Array2D<float>& taper) = 0;
+      const Plan& plan, const aocommon::xt::Span<float, 1>& frequencies,
+      const aocommon::xt::Span<std::complex<float>, 4>& visibilities,
+      const aocommon::xt::Span<UVW<float>, 2>& uvw,
+      const aocommon::xt::Span<std::pair<unsigned int, unsigned int>, 1>&
+          baselines,
+      const aocommon::xt::Span<Matrix2x2<std::complex<float>>, 4>& aterms,
+      const aocommon::xt::Span<unsigned int, 1>& aterm_offsets,
+      const aocommon::xt::Span<float, 2>& taper) = 0;
 
   virtual void do_degridding(
-      const Plan& plan, const Array1D<float>& frequencies,
-      Array4D<std::complex<float>>& visibilities,
-      const Array2D<UVW<float>>& uvw,
-      const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
-      const Array4D<Matrix2x2<std::complex<float>>>& aterms,
-      const Array1D<unsigned int>& aterms_offsets,
-      const Array2D<float>& taper) = 0;
+      const Plan& plan, const aocommon::xt::Span<float, 1>& frequencies,
+      aocommon::xt::Span<std::complex<float>, 4>& visibilities,
+      const aocommon::xt::Span<UVW<float>, 2>& uvw,
+      const aocommon::xt::Span<std::pair<unsigned int, unsigned int>, 1>&
+          baselines,
+      const aocommon::xt::Span<Matrix2x2<std::complex<float>>, 4>& aterms,
+      const aocommon::xt::Span<unsigned int, 1>& aterm_offsets,
+      const aocommon::xt::Span<float, 2>& taper) = 0;
 
   // Using rvalue references (&&) for all containers do_calibrate_init will take
   // ownership of. Call with std::move(...)
   virtual void do_calibrate_init(
       std::vector<std::vector<std::unique_ptr<Plan>>>&& plans,
-      const Array2D<float>& frequencies,
-      Array6D<std::complex<float>>&& visibilities, Array6D<float>&& weights,
-      Array3D<UVW<float>>&& uvw,
-      Array2D<std::pair<unsigned int, unsigned int>>&& baselines,
-      const Array2D<float>& taper) {
+      const aocommon::xt::Span<float, 2>& frequencies,
+      Tensor<std::complex<float>, 6>&& visibilities, Tensor<float, 6>&& weights,
+      Tensor<UVW<float>, 3>&& uvw,
+      Tensor<std::pair<unsigned int, unsigned int>, 2>&& baselines,
+      const aocommon::xt::Span<float, 2>& taper) {
     throw std::runtime_error(
         "do_calibrate_init is not implemented by this proxy");
   }
 
   virtual void do_calibrate_update(
-      const int station_nr,
-      const Array5D<Matrix2x2<std::complex<float>>>& aterms,
-      const Array5D<Matrix2x2<std::complex<float>>>& derivative_aterms,
-      Array4D<double>& hessian, Array3D<double>& gradient,
-      Array1D<double>& residual) {
+      const int antenna_nr,
+      const aocommon::xt::Span<Matrix2x2<std::complex<float>>, 5>& aterms,
+      const aocommon::xt::Span<Matrix2x2<std::complex<float>>, 5>&
+          aterm_derivatives,
+      aocommon::xt::Span<double, 4>& hessian,
+      aocommon::xt::Span<double, 3>& gradient,
+      aocommon::xt::Span<double, 1>& residual) {
     throw std::runtime_error(
         "do_calibrate_update is not implemented by this proxy");
   }
@@ -414,12 +432,13 @@ class Proxy {
 
   virtual void do_compute_avg_beam(
       const unsigned int nr_antennas, const unsigned int nr_channels,
-      const Array2D<UVW<float>>& uvw_array,
-      const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
-      const Array4D<Matrix2x2<std::complex<float>>>& aterms,
-      const Array1D<unsigned int>& aterms_offsets,
-      const Array4D<float>& weights,
-      idg::Array4D<std::complex<float>>& average_beam);
+      const aocommon::xt::Span<UVW<float>, 2>& uvw,
+      const aocommon::xt::Span<std::pair<unsigned int, unsigned int>, 1>&
+          baselines,
+      const aocommon::xt::Span<Matrix2x2<std::complex<float>>, 4>& aterms,
+      const aocommon::xt::Span<unsigned int, 1>& aterm_offsets,
+      const aocommon::xt::Span<float, 4>& weights,
+      aocommon::xt::Span<std::complex<float>, 4>& average_beam);
 
  protected:
   void check_dimensions(
@@ -435,32 +454,31 @@ class Proxy {
       unsigned int grid_width, unsigned int aterms_nr_timeslots,
       unsigned int aterms_nr_stations, unsigned int aterms_aterm_height,
       unsigned int aterms_aterm_width, unsigned int aterms_nr_polarizations,
-      unsigned int aterms_offsets_nr_timeslots_plus_one,
+      unsigned int aterm_offsets_nr_timeslots_plus_one,
       unsigned int taper_height, unsigned int taper_width) const;
 
   void check_dimensions(
       const Plan::Options& options, unsigned int subgrid_size,
-      const Array1D<float>& frequencies,
-      const Array4D<std::complex<float>>& visibilities,
-      const Array2D<UVW<float>>& uvw,
-      const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
-      const Grid& grid, const Array4D<Matrix2x2<std::complex<float>>>& aterms,
-      const Array1D<unsigned int>& aterms_offsets,
-      const Array2D<float>& taper) const;
+      const aocommon::xt::Span<float, 1>& frequencies,
+      const aocommon::xt::Span<std::complex<float>, 4>& visibilities,
+      const aocommon::xt::Span<UVW<float>, 2>& uvw,
+      const aocommon::xt::Span<std::pair<unsigned int, unsigned int>, 1>&
+          baselines,
+      const aocommon::xt::Span<std::complex<float>, 4>& grid,
+      const aocommon::xt::Span<Matrix2x2<std::complex<float>>, 4>& aterms,
+      const aocommon::xt::Span<unsigned int, 1>& aterm_offsets,
+      const aocommon::xt::Span<float, 2>& taper) const;
 
-  Array1D<float> compute_wavenumbers(const Array1D<float>& frequencies) const;
+  Tensor<float, 1> compute_wavenumbers(
+      const aocommon::xt::Span<float, 1>& frequencies);
 
   const int nr_correlations = 4;
 
-  std::vector<std::complex<float>> m_avg_aterm_correction;
+  aocommon::xt::Span<std::complex<float>, 4> m_avg_aterm_correction;
 
  protected:
   virtual bool do_supports_wstacking() { return false; }
   virtual bool do_supports_wtiling() { return false; }
-
-  std::shared_ptr<Grid> m_grid = nullptr;
-
-  std::shared_ptr<Report> m_report;
 
   bool m_disable_wstacking = false;
   bool m_disable_wtiling = false;
@@ -469,8 +487,17 @@ class Proxy {
     int subgrid_size;
     float cell_size;
     float w_step;
-    Array1D<float> shift{2};
+    std::array<float, 2> shift;
   } m_cache_state;
+
+  void free_memory() { memory_.clear(); };
+
+  std::shared_ptr<Report>& get_report() { return report_; }
+
+ private:
+  std::shared_ptr<Report> report_;
+  std::vector<std::unique_ptr<auxiliary::Memory>> memory_;
+  aocommon::xt::Span<std::complex<float>, 4> grid_;
 
 };  // end class Proxy
 

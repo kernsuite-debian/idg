@@ -51,17 +51,18 @@ class CUDA : public Proxy {
    */
   virtual void do_compute_avg_beam(
       const unsigned int nr_antennas, const unsigned int nr_channels,
-      const Array2D<UVW<float>>& uvw,
-      const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
-      const Array4D<Matrix2x2<std::complex<float>>>& aterms,
-      const Array1D<unsigned int>& aterms_offsets,
-      const Array4D<float>& weights,
-      idg::Array4D<std::complex<float>>& average_beam) override;
+      const aocommon::xt::Span<UVW<float>, 2>& uvw,
+      const aocommon::xt::Span<std::pair<unsigned int, unsigned int>, 1>&
+          baselines,
+      const aocommon::xt::Span<Matrix2x2<std::complex<float>>, 4>& aterms,
+      const aocommon::xt::Span<unsigned int, 1>& aterm_offsets,
+      const aocommon::xt::Span<float, 4>& weights,
+      aocommon::xt::Span<std::complex<float>, 4>& average_beam) override;
 
  protected:
   void init_devices();
 
-  std::unique_ptr<powersensor::PowerSensor> hostPowerSensor;
+  std::unique_ptr<pmt::Pmt> power_meter_;
 
   /*
    * Options used internally by the CUDA proxies
@@ -96,12 +97,12 @@ class CUDA : public Proxy {
     std::complex<float>* visibilities_ptr;
   };
 
-  int initialize_jobs(const int nr_baselines, const int nr_timesteps,
-                      const int nr_channels, const int subgrid_size,
-                      const size_t bytes_free, const Plan& plan,
-                      const Array4D<std::complex<float>>& visibilities,
-                      const Array2D<UVW<float>>& uvw,
-                      std::vector<JobData>& jobs) const;
+  int initialize_jobs(
+      const int nr_baselines, const int nr_timesteps, const int nr_channels,
+      const int subgrid_size, const size_t bytes_free, const Plan& plan,
+      const aocommon::xt::Span<std::complex<float>, 4>& visibilities,
+      const aocommon::xt::Span<UVW<float>, 2>& uvw,
+      std::vector<JobData>& jobs) const;
 
   /*
    * W-Tiling
@@ -120,31 +121,31 @@ class CUDA : public Proxy {
                                 const int nr_polarizations,
                                 const int subgrid_size, const float image_size,
                                 const float w_step,
-                                const idg::Array1D<float>& shift,
+                                const std::array<float, 2>& shift,
                                 const size_t bytes_free) const;
 
   void run_wtiles_to_grid(unsigned int subgrid_size, float image_size,
-                          float w_step, const Array1D<float>& shift,
+                          float w_step, const std::array<float, 2>& shift,
                           WTileUpdateInfo& wtile_flush_info);
 
   void run_subgrids_to_wtiles(unsigned int nr_polarizations,
                               unsigned int subgrid_offset,
                               unsigned int nr_subgrids,
                               unsigned int subgrid_size, float image_size,
-                              float w_step, const Array1D<float>& shift,
+                              float w_step, const std::array<float, 2>& shift,
                               WTileUpdateSet& wtile_flush_set,
                               cu::DeviceMemory& d_subgrids,
                               cu::DeviceMemory& d_metadata);
 
   void run_wtiles_from_grid(unsigned int subgrid_size, float image_size,
-                            float w_step, const Array1D<float>& shift,
+                            float w_step, const std::array<float, 2>& shift,
                             WTileUpdateInfo& wtile_initialize_info);
 
   void run_subgrids_from_wtiles(unsigned int nr_polarizations,
                                 unsigned int subgrid_offset,
                                 unsigned int nr_subgrids,
                                 unsigned int subgrid_size, float image_size,
-                                float w_step, const Array1D<float>& shift,
+                                float w_step, const std::array<float, 2>& shift,
                                 WTileUpdateSet& wtile_initialize_set,
                                 cu::DeviceMemory& d_subgrids,
                                 cu::DeviceMemory& d_metadata);
@@ -164,23 +165,20 @@ class CUDA : public Proxy {
     std::vector<std::unique_ptr<cu::DeviceMemory>> d_patches;
   } m_buffers_wtiling;
 
-  /*
-   * Unified Memory
-   */
-  cu::UnifiedMemory& get_unified_grid() { return *u_grid_; }
-  cu::UnifiedMemory& allocate_unified_grid(const cu::Context& context,
-                                           size_t size);
-  void free_unified_grid();
+ protected:
+  virtual std::complex<float>* get_unified_grid_data() {
+    return unified_grid_.Span().data();
+  }
+  void set_unified_grid(Tensor<std::complex<float>, 3>&& tensor) {
+    unified_grid_ = std::move(tensor);
+  }
 
  private:
+  void free_unified_grid();
+
   ProxyInfo& mInfo;
   std::vector<std::unique_ptr<kernel::cuda::InstanceCUDA>> devices;
-
-  /**
-   * Copy of the grid in CUDA Unified Memory used by the Generic and Unified
-   * proxies.
-   */
-  std::unique_ptr<cu::UnifiedMemory> u_grid_;
+  Tensor<std::complex<float>, 3> unified_grid_;
 };
 }  // namespace cuda
 }  // end namespace proxy

@@ -5,9 +5,9 @@
 
 #include "Generic.h"
 #include "InstanceCUDA.h"
+#include "kernels/KernelGridder.cuh"
 
 using namespace idg::kernel::cuda;
-using namespace powersensor;
 
 namespace idg {
 namespace proxy {
@@ -58,90 +58,112 @@ Generic::~Generic() {
 
 /* High level routines */
 void Generic::do_gridding(
-    const Plan& plan, const Array1D<float>& frequencies,
-    const Array4D<std::complex<float>>& visibilities,
-    const Array2D<UVW<float>>& uvw,
-    const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
-    const Array4D<Matrix2x2<std::complex<float>>>& aterms,
-    const Array1D<unsigned int>& aterms_offsets,
-    const Array2D<float>& spheroidal) {
+    const Plan& plan, const aocommon::xt::Span<float, 1>& frequencies,
+    const aocommon::xt::Span<std::complex<float>, 4>& visibilities,
+    const aocommon::xt::Span<UVW<float>, 2>& uvw,
+    const aocommon::xt::Span<std::pair<unsigned int, unsigned int>, 1>&
+        baselines,
+    const aocommon::xt::Span<Matrix2x2<std::complex<float>>, 4>& aterms,
+    const aocommon::xt::Span<unsigned int, 1>& aterm_offsets,
+    const aocommon::xt::Span<float, 2>& taper) {
 #if defined(DEBUG)
   std::cout << "Generic::" << __func__ << std::endl;
 #endif
 
-  run_imaging(plan, frequencies, visibilities, uvw, baselines, *m_grid, aterms,
-              aterms_offsets, spheroidal, ImagingMode::mode_gridding);
+  run_imaging(plan, frequencies, visibilities, uvw, baselines, get_grid(),
+              aterms, aterm_offsets, taper, ImagingMode::mode_gridding);
 }
 
 void Generic::do_degridding(
-    const Plan& plan, const Array1D<float>& frequencies,
-    Array4D<std::complex<float>>& visibilities, const Array2D<UVW<float>>& uvw,
-    const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
-    const Array4D<Matrix2x2<std::complex<float>>>& aterms,
-    const Array1D<unsigned int>& aterms_offsets,
-    const Array2D<float>& spheroidal) {
+    const Plan& plan, const aocommon::xt::Span<float, 1>& frequencies,
+    aocommon::xt::Span<std::complex<float>, 4>& visibilities,
+    const aocommon::xt::Span<UVW<float>, 2>& uvw,
+    const aocommon::xt::Span<std::pair<unsigned int, unsigned int>, 1>&
+        baselines,
+    const aocommon::xt::Span<Matrix2x2<std::complex<float>>, 4>& aterms,
+    const aocommon::xt::Span<unsigned int, 1>& aterm_offsets,
+    const aocommon::xt::Span<float, 2>& taper) {
 #if defined(DEBUG)
   std::cout << "Generic::" << __func__ << std::endl;
 #endif
 
-  run_imaging(plan, frequencies, visibilities, uvw, baselines, *m_grid, aterms,
-              aterms_offsets, spheroidal, ImagingMode::mode_degridding);
+  run_imaging(plan, frequencies, visibilities, uvw, baselines, get_grid(),
+              aterms, aterm_offsets, taper, ImagingMode::mode_degridding);
 }
 
-void Generic::set_grid(std::shared_ptr<Grid> grid) {
+void Generic::set_grid(aocommon::xt::Span<std::complex<float>, 4>& grid) {
+  const size_t nr_w_layers = grid.shape(0);
+  assert(nr_w_layers == 1);
+  const size_t nr_polarizations = grid.shape(1);
+  const size_t grid_size = grid.shape(2);
+  assert(grid.shape(3) == grid_size);
+  const size_t sizeof_grid = grid.size() * sizeof(*grid.data());
+
   CUDA::set_grid(grid);
   cu::Context& context = get_device(0).get_context();
   if (m_disable_wtiling) {
     InstanceCUDA& device = get_device(0);
     cu::Stream& htodstream = device.get_htod_stream();
-    d_grid_.reset(new cu::DeviceMemory(context, grid->bytes()));
-    htodstream.memcpyHtoD(*d_grid_, grid->data(), grid->bytes());
+    d_grid_.reset(new cu::DeviceMemory(context, sizeof_grid));
+    htodstream.memcpyHtoD(*d_grid_, grid.data(), sizeof_grid);
   }
   if (m_use_unified_memory) {
-    cu::UnifiedMemory& u_grid = allocate_unified_grid(context, grid->bytes());
-    char* first = reinterpret_cast<char*>(grid->data());
-    char* result = reinterpret_cast<char*>(u_grid.data());
-    std::copy_n(first, grid->bytes(), result);
+    Tensor<std::complex<float>, 3> unified_grid(
+        std::make_unique<cu::UnifiedMemory>(context, sizeof_grid),
+        {nr_polarizations, grid_size, grid_size});
+    std::copy_n(grid.data(), grid.size(), get_unified_grid_data());
+    set_unified_grid(std::move(unified_grid));
   }
 }
 
-std::shared_ptr<Grid> Generic::get_final_grid() {
+aocommon::xt::Span<std::complex<float>, 4>& Generic::get_final_grid() {
   if (!m_disable_wtiling) {
     flush_wtiles();
   }
+
+  const size_t grid_size = get_grid().shape(2);
+  assert(get_grid().shape(3) == grid_size);
+
   if (m_use_unified_memory) {
-    cu::UnifiedMemory& u_grid = get_unified_grid();
-    char* first = reinterpret_cast<char*>(u_grid.data());
-    char* result = reinterpret_cast<char*>(m_grid->data());
-    std::copy_n(first, m_grid->bytes(), result);
+    std::copy_n(get_unified_grid_data(), get_grid().size(), get_grid().data());
   } else if (m_disable_wtiling) {
     InstanceCUDA& device = get_device(0);
     cu::Stream& dtohstream = device.get_dtoh_stream();
-    dtohstream.memcpyDtoH(m_grid->data(), *d_grid_, m_grid->bytes());
+    const size_t sizeof_grid = get_grid().size() * sizeof(*get_grid().data());
+    dtohstream.memcpyDtoH(get_grid().data(), *d_grid_, sizeof_grid);
   }
-  return m_grid;
+  return get_grid();
 }
 
 std::unique_ptr<Plan> Generic::make_plan(
-    const int kernel_size, const Array1D<float>& frequencies,
-    const Array2D<UVW<float>>& uvw,
-    const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
-    const Array1D<unsigned int>& aterms_offsets, Plan::Options options) {
+    const int kernel_size, const aocommon::xt::Span<float, 1>& frequencies,
+    const aocommon::xt::Span<UVW<float>, 2>& uvw,
+    const aocommon::xt::Span<std::pair<unsigned int, unsigned int>, 1>&
+        baselines,
+    const aocommon::xt::Span<unsigned int, 1>& aterm_offsets,
+    Plan::Options options) {
   if (do_supports_wtiling() && !m_disable_wtiling) {
+    const size_t grid_size = get_grid().shape(2);
+    assert(get_grid().shape(3) == grid_size);
     options.w_step = m_cache_state.w_step;
     options.nr_w_layers = std::numeric_limits<int>::max();
+    options.max_nr_channels_per_subgrid =
+        options.max_nr_channels_per_subgrid
+            ? min(options.max_nr_channels_per_subgrid,
+                  KernelGridder::block_size_x)
+            : KernelGridder::block_size_x;
     return std::unique_ptr<Plan>(
-        new Plan(kernel_size, m_cache_state.subgrid_size, m_grid->get_y_dim(),
+        new Plan(kernel_size, m_cache_state.subgrid_size, grid_size,
                  m_cache_state.cell_size, m_cache_state.shift, frequencies, uvw,
-                 baselines, aterms_offsets, m_wtiles, options));
+                 baselines, aterm_offsets, m_wtiles, options));
   } else {
     return Proxy::make_plan(kernel_size, frequencies, uvw, baselines,
-                            aterms_offsets, options);
+                            aterm_offsets, options);
   }
 }
 
 void Generic::init_cache(int subgrid_size, float cell_size, float w_step,
-                         const Array1D<float>& shift) {
+                         const std::array<float, 2>& shift) {
   // Initialize cache
   Proxy::init_cache(subgrid_size, cell_size, w_step, shift);
 

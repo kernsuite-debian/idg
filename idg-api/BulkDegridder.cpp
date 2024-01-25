@@ -20,11 +20,10 @@ BulkDegridderImpl::BulkDegridderImpl(const BufferSetImpl& bufferset,
                                      const std::size_t nr_stations)
     : bufferset_(bufferset),
       frequencies_(
-          bufferset.get_proxy().allocate_array1d<float>(frequencies.size())),
+          bufferset.get_proxy().allocate_span<float, 1>({frequencies.size()})),
       nr_stations_(nr_stations),
-      shift_(bufferset.get_shift().size()) {
+      shift_(bufferset.get_shift()) {
   std::copy_n(frequencies.data(), frequencies.size(), frequencies_.data());
-  std::copy_n(bufferset.get_shift().data(), shift_.size(), shift_.data());
 }
 
 BulkDegridderImpl::~BulkDegridderImpl() {}
@@ -53,24 +52,29 @@ void BulkDegridderImpl::compute_visibilities(
 
   const size_t subgridsize = bufferset_.get_subgridsize();
   proxy::Proxy& proxy = bufferset_.get_proxy();
-  const int nr_correlations = bufferset_.get_nr_correlations();
+  const size_t nr_correlations = bufferset_.get_nr_correlations();
 
   static const double kDefaultUVWFactors[3] = {1.0, 1.0, 1.0};
   if (!uvw_factors) uvw_factors = kDefaultUVWFactors;
 
-  auto bufferStationPairs =
-      proxy.allocate_array1d<std::pair<unsigned int, unsigned int>>(
-          nr_baselines);
+  auto bufferStationPairs_tensor =
+      proxy.allocate_tensor<std::pair<unsigned int, unsigned int>, 1>(
+          {nr_baselines});
+  auto bufferStationPairs = bufferStationPairs_tensor.Span();
+  bufferStationPairs.fill(
+      std::pair<unsigned int, unsigned int>(nr_stations_, nr_stations_));
   std::vector<int> baseline_map;
-  auto bufferUVW =
-      proxy.allocate_array2d<UVW<float>>(nr_baselines, nr_timesteps);
-  auto bufferVisibilities = proxy.allocate_array4d<std::complex<float>>(
-      nr_baselines, nr_timesteps, frequencies_.size(), nr_correlations);
+  auto bufferUVW_tensor =
+      proxy.allocate_tensor<UVW<float>, 2>({nr_baselines, nr_timesteps});
+  auto bufferUVW = bufferUVW_tensor.Span();
+  auto bufferVisibilities_tensor =
+      proxy.allocate_tensor<std::complex<float>, 4>(
+          {nr_baselines, nr_timesteps, frequencies_.size(), nr_correlations});
+  auto bufferVisibilities = bufferVisibilities_tensor.Span();
   // The proxy does not touch visibilities for out-of-bound uvw coordinates.
   // Since we copy all visibilities to the caller, initialize them to zero.
-  bufferVisibilities.zero();
+  bufferVisibilities.fill(std::complex<float>(0, 0));
 
-  bufferStationPairs.init({nr_stations_, nr_stations_});
   baseline_map.reserve(nr_baselines);
   for (size_t bl = 0; bl < nr_baselines; ++bl) {
     const size_t ant1 = antennas1[bl];
@@ -96,8 +100,8 @@ void BulkDegridderImpl::compute_visibilities(
   // The proxy expects the number of time steps as last value.
   std::vector<unsigned int> local_aterm_offsets = aterm_offsets;
   local_aterm_offsets.push_back(nr_timesteps);
-  const Array1D<unsigned int> aterm_offsets_array(local_aterm_offsets.data(),
-                                                  local_aterm_offsets.size());
+  auto aterm_offsets_span = aocommon::xt::CreateSpan<unsigned int, 1>(
+      local_aterm_offsets, {local_aterm_offsets.size()});
 
   // If aterms is empty, create default values and update the pointer.
   std::vector<Matrix2x2<std::complex<float>>> default_aterms;
@@ -110,15 +114,14 @@ void BulkDegridderImpl::compute_visibilities(
   // The const cast is needed since proxy.degridding accepts const references
   // to arrays with non-const values, and the constructor for such arrays only
   // accepts non-const pointers.
-  auto* local_aterms = reinterpret_cast<Matrix2x2<std::complex<float>>*>(
-      const_cast<std::complex<float>*>(aterms));
-  const Array4D<Matrix2x2<std::complex<float>>> aterms_array(
-      local_aterms, aterm_offsets_array.get_x_dim() - 1, nr_stations_,
-      subgridsize, subgridsize);
+  using Aterm = Matrix2x2<std::complex<float>>;
+  auto aterms_span = aocommon::xt::CreateSpan<Aterm, 4>(
+      reinterpret_cast<Aterm*>(const_cast<std::complex<float>*>(aterms)),
+      {aterm_offsets_span.size() - 1, nr_stations_, subgridsize, subgridsize});
 
   // Set Plan options
   Plan::Options options;
-  options.nr_w_layers = proxy.get_grid().get_w_dim();
+  options.nr_w_layers = proxy.get_grid().shape(0);
   options.plan_strict = false;
   options.mode = (bufferset_.get_nr_polarizations() == 4)
                      ? Plan::Mode::FULL_POLARIZATION
@@ -128,14 +131,14 @@ void BulkDegridderImpl::compute_visibilities(
   bufferset_.get_watch(BufferSetImpl::Watch::kPlan).Start();
   std::unique_ptr<Plan> plan =
       proxy.make_plan(bufferset_.get_kernel_size(), frequencies_, bufferUVW,
-                      bufferStationPairs, aterm_offsets_array, options);
+                      bufferStationPairs, aterm_offsets_span, options);
   bufferset_.get_watch(BufferSetImpl::Watch::kPlan).Pause();
 
   // Run degridding
   bufferset_.get_watch(BufferSetImpl::Watch::kDegridding).Start();
   proxy.degridding(*plan, frequencies_, bufferVisibilities, bufferUVW,
-                   bufferStationPairs, aterms_array, aterm_offsets_array,
-                   bufferset_.get_spheroidal());
+                   bufferStationPairs, aterms_span, aterm_offsets_span,
+                   bufferset_.get_taper());
   bufferset_.get_watch(BufferSetImpl::Watch::kDegridding).Pause();
 
   // Transpose bufferVisibilities into visibilities.
@@ -148,8 +151,8 @@ void BulkDegridderImpl::compute_visibilities(
       for (size_t bl = 0; bl < nr_baselines; ++bl) {
         const int local_bl = baseline_map[bl];
         if (local_bl != -1) {
-          const auto* in = reinterpret_cast<std::complex<float>*>(
-              bufferVisibilities.data(local_bl, t));
+          const std::complex<float>* in =
+              &bufferVisibilities(local_bl, t, 0, 0);
           std::complex<float>* out = visibilities[t] + bl * baseline_size;
           std::copy_n(in, baseline_size, out);
         }
@@ -164,8 +167,8 @@ void BulkDegridderImpl::compute_visibilities(
       for (size_t bl = 0; bl < nr_baselines; ++bl) {
         const int local_bl = baseline_map[bl];
         if (local_bl != -1) {
-          const auto* in = reinterpret_cast<std::complex<float>*>(
-              bufferVisibilities.data(local_bl, t));
+          const std::complex<float>* in =
+              &bufferVisibilities(local_bl, t, 0, 0);
           std::complex<float>* out = visibilities[t] + bl * baseline_size;
           for (size_t i = 0; i < nr_channels; ++i) {
             out[i * nr_correlations_out] = in[i * nr_correlations];

@@ -78,27 +78,21 @@ class BufferSetImpl : public virtual BufferSet {
 
   float get_cell_size() const { return m_cell_size; }
   float get_w_step() const { return m_w_step; }
-  const idg::Array1D<float>& get_shift() const { return m_shift; }
+  const std::array<float, 2>& get_shift() const { return m_shift; }
   float get_kernel_size() const { return m_kernel_size; }
-  const Array2D<float>& get_spheroidal() const { return m_spheroidal; }
+  const aocommon::xt::Span<float, 2>& get_taper() const { return m_taper; }
 
   Stopwatch& get_watch(Watch watch) const;
 
   bool get_do_gridding() const { return m_do_gridding; }
   bool get_apply_aterm() const { return m_apply_aterm; }
-  const Array4D<std::complex<float>>& get_default_aterm_correction() const {
-    return m_default_aterm_correction;
-  }
-  const Array4D<std::complex<float>>& get_avg_aterm_correction() const {
-    return m_avg_aterm_correction;
-  }
 
   proxy::Proxy& get_proxy() const { return *m_proxy; }
 
  private:
   std::unique_ptr<proxy::Proxy> create_proxy(Type architecture);
 
-  std::shared_ptr<idg::Grid> allocate_grid();
+  aocommon::xt::Span<std::complex<float>, 4> allocate_grid();
   void free_grid();
 
   std::unique_ptr<proxy::Proxy> m_proxy;
@@ -109,12 +103,10 @@ class BufferSetImpl : public virtual BufferSet {
   std::vector<float> m_taper_subgrid;
   std::vector<float> m_taper_grid;
   std::vector<float> m_inv_taper;
-  Array2D<float> m_spheroidal;
+  aocommon::xt::Span<float, 2> m_taper;
   std::vector<std::complex<float>> m_average_beam;
   std::shared_ptr<std::vector<float>> m_scalar_beam;
   std::shared_ptr<std::vector<std::complex<float>>> m_matrix_inverse_beam;
-  Array4D<std::complex<float>> m_default_aterm_correction;
-  Array4D<std::complex<float>> m_avg_aterm_correction;
   bool m_stokes_I_only;
   int m_nr_correlations;
   int m_nr_polarizations;
@@ -123,7 +115,7 @@ class BufferSetImpl : public virtual BufferSet {
   float m_cell_size;
   float m_w_step;
   int m_nr_w_layers;
-  Array1D<float> m_shift;
+  std::array<float, 2> m_shift;
   size_t m_size;
   size_t m_padded_size;
   float m_kernel_size;
@@ -140,7 +132,8 @@ class BufferSetImpl : public virtual BufferSet {
   std::unique_ptr<Stopwatch> m_degridding_watch;
 
   // debug
-  static void write_grid(idg::Grid& grid);
+  static void write_grid(
+      const aocommon::xt::Span<std::complex<float>, 4>& grid);
 };
 
 }  // namespace api

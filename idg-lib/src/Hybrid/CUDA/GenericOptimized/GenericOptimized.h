@@ -39,71 +39,58 @@ class GenericOptimized : public cuda::CUDA {
 
   void set_disable_wtiling_gpu(bool v) { m_disable_wtiling_gpu = v; }
 
-  void set_grid(std::shared_ptr<Grid> grid) override;
+  void set_grid(aocommon::xt::Span<std::complex<float>, 4>& grid) override;
 
-  std::shared_ptr<Grid> get_final_grid() override;
+  aocommon::xt::Span<std::complex<float>, 4>& get_final_grid() override;
 
   void init_cache(int subgrid_size, float cell_size, float w_step,
-                  const Array1D<float>& shift) override;
+                  const std::array<float, 2>& shift) override;
 
   std::unique_ptr<Plan> make_plan(
-      const int kernel_size, const Array1D<float>& frequencies,
-      const Array2D<UVW<float>>& uvw,
-      const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
-      const Array1D<unsigned int>& aterms_offsets,
+      const int kernel_size, const aocommon::xt::Span<float, 1>& frequencies,
+      const aocommon::xt::Span<UVW<float>, 2>& uvw,
+      const aocommon::xt::Span<std::pair<unsigned int, unsigned int>, 1>&
+          baselines,
+      const aocommon::xt::Span<unsigned int, 1>& aterm_offsets,
       Plan::Options options) override;
 
  private:
   void run_imaging(
-      const Plan& plan, const Array1D<float>& frequencies,
-      Array4D<std::complex<float>>& visibilities,
-      const Array2D<UVW<float>>& uvw,
-      const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
-      Grid& grid, const Array4D<Matrix2x2<std::complex<float>>>& aterms,
-      const Array1D<unsigned int>& aterms_offsets,
-      const Array2D<float>& spheroidal, ImagingMode mode);
+      const Plan& plan, const aocommon::xt::Span<float, 1>& frequencies,
+      aocommon::xt::Span<std::complex<float>, 4>& visibilities,
+      const aocommon::xt::Span<UVW<float>, 2>& uvw,
+      const aocommon::xt::Span<std::pair<unsigned int, unsigned int>, 1>&
+          baselines,
+      aocommon::xt::Span<std::complex<float>, 4>& grid,
+      const aocommon::xt::Span<Matrix2x2<std::complex<float>>, 4>& aterms,
+      const aocommon::xt::Span<unsigned int, 1>& aterm_offsets,
+      const aocommon::xt::Span<float, 2>& taper, ImagingMode mode);
 
   /*
    * Gridding
    */
   void do_gridding(
-      const Plan& plan, const Array1D<float>& frequencies,
-      const Array4D<std::complex<float>>& visibilities,
-      const Array2D<UVW<float>>& uvw,
-      const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
-      const Array4D<Matrix2x2<std::complex<float>>>& aterms,
-      const Array1D<unsigned int>& aterms_offsets,
-      const Array2D<float>& spheroidal) override;
-
-  void run_gridding(
-      const Plan& plan, const Array1D<float>& frequencies,
-      const Array4D<std::complex<float>>& visibilities,
-      const Array2D<UVW<float>>& uvw,
-      const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
-      Grid& grid, const Array4D<Matrix2x2<std::complex<float>>>& aterms,
-      const Array1D<unsigned int>& aterms_offsets,
-      const Array2D<float>& spheroidal);
+      const Plan& plan, const aocommon::xt::Span<float, 1>& frequencies,
+      const aocommon::xt::Span<std::complex<float>, 4>& visibilities,
+      const aocommon::xt::Span<UVW<float>, 2>& uvw,
+      const aocommon::xt::Span<std::pair<unsigned int, unsigned int>, 1>&
+          baselines,
+      const aocommon::xt::Span<Matrix2x2<std::complex<float>>, 4>& aterms,
+      const aocommon::xt::Span<unsigned int, 1>& aterm_offsets,
+      const aocommon::xt::Span<float, 2>& taper) override;
 
   /*
    * Degridding
    */
   void do_degridding(
-      const Plan& plan, const Array1D<float>& frequencies,
-      Array4D<std::complex<float>>& visibilities,
-      const Array2D<UVW<float>>& uvw,
-      const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
-      const Array4D<Matrix2x2<std::complex<float>>>& aterms,
-      const Array1D<unsigned int>& aterms_offsets,
-      const Array2D<float>& spheroidal) override;
-
-  void run_degridding(
-      const Plan& plan, const Array1D<float>& frequencies,
-      Array4D<std::complex<float>>& visibilities,
-      const Array2D<UVW<float>>& uvw,
-      const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
-      const Grid& grid, const Array4D<Matrix2x2<std::complex<float>>>& aterms,
-      const Array1D<unsigned int>& aterms_offsets,
-      const Array2D<float>& spheroidal);
+      const Plan& plan, const aocommon::xt::Span<float, 1>& frequencies,
+      aocommon::xt::Span<std::complex<float>, 4>& visibilities,
+      const aocommon::xt::Span<UVW<float>, 2>& uvw,
+      const aocommon::xt::Span<std::pair<unsigned int, unsigned int>, 1>&
+          baselines,
+      const aocommon::xt::Span<Matrix2x2<std::complex<float>>, 4>& aterms,
+      const aocommon::xt::Span<unsigned int, 1>& aterm_offsets,
+      const aocommon::xt::Span<float, 2>& taper) override;
 
   /*
    * FFT
@@ -115,18 +102,20 @@ class GenericOptimized : public cuda::CUDA {
    */
   void do_calibrate_init(
       std::vector<std::vector<std::unique_ptr<Plan>>>&& plans,
-      const Array2D<float>& frequencies,
-      Array6D<std::complex<float>>&& visibilities, Array6D<float>&& weights,
-      Array3D<UVW<float>>&& uvw,
-      Array2D<std::pair<unsigned int, unsigned int>>&& baselines,
-      const Array2D<float>& spheroidal) override;
+      const aocommon::xt::Span<float, 2>& frequencies,
+      Tensor<std::complex<float>, 6>&& visibilities, Tensor<float, 6>&& weights,
+      Tensor<UVW<float>, 3>&& uvw,
+      Tensor<std::pair<unsigned int, unsigned int>, 2>&& baselines,
+      const aocommon::xt::Span<float, 2>& taper) override;
 
   void do_calibrate_update(
-      const int station_nr,
-      const Array5D<Matrix2x2<std::complex<float>>>& aterms,
-      const Array5D<Matrix2x2<std::complex<float>>>& derivative_aterms,
-      Array4D<double>& hessian, Array3D<double>& gradient,
-      Array1D<double>& residual) override;
+      const int antenna_nr,
+      const aocommon::xt::Span<Matrix2x2<std::complex<float>>, 5>& aterms,
+      const aocommon::xt::Span<Matrix2x2<std::complex<float>>, 5>&
+          aterm_derivatives,
+      aocommon::xt::Span<double, 4>& hessian,
+      aocommon::xt::Span<double, 3>& gradient,
+      aocommon::xt::Span<double, 1>& residual) override;
 
   void do_calibrate_finish() override;
 
@@ -143,11 +132,11 @@ class GenericOptimized : public cuda::CUDA {
    */
   struct {
     std::vector<std::vector<std::unique_ptr<Plan>>> plans;
-    std::vector<std::vector<Array4D<std::complex<float>>>> subgrids;
-    std::vector<Array1D<float>> wavenumbers;
-    Array6D<std::complex<float>> visibilities;
-    Array6D<float> weights;
-    Array3D<UVW<float>> uvw;
+    std::vector<std::vector<Tensor<std::complex<float>, 4>>> subgrids;
+    std::vector<Tensor<float, 1>> wavenumbers;
+    Tensor<std::complex<float>, 6> visibilities;
+    Tensor<float, 6> weights;
+    Tensor<UVW<float>, 3> uvw;
     unsigned int nr_baselines;
     unsigned int nr_timesteps;
     unsigned int nr_channels_per_block;
@@ -161,7 +150,7 @@ class GenericOptimized : public cuda::CUDA {
     std::vector<std::unique_ptr<cu::DeviceMemory>> d_visibilities;
     std::vector<std::unique_ptr<cu::DeviceMemory>> d_weights;
     std::vector<std::unique_ptr<cu::DeviceMemory>> d_uvw;
-    std::vector<std::unique_ptr<cu::DeviceMemory>> d_aterms_indices;
+    std::vector<std::unique_ptr<cu::DeviceMemory>> d_aterm_indices;
   } m_calibrate_state;
 
   // Note:

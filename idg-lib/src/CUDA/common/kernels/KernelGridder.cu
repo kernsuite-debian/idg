@@ -55,7 +55,7 @@
 /*
     Shared memory
 */
-__shared__ float4 visibilities_[BATCH_SIZE][2];
+__shared__ float4 visibilities_[2][BATCH_SIZE];
 __shared__ float4 uvw_[BATCH_SIZE];
 
 
@@ -73,7 +73,7 @@ __device__ void update_pixel(
     const unsigned             station1,
     const unsigned             station2,
     const float2* __restrict__ aterms,
-          float2* __restrict   pixel,
+          float2* __restrict__ pixel,
           float2* __restrict__ pixel_sum)
 {
     // Apply aterm
@@ -102,7 +102,7 @@ __device__ void update_subgrid(
     const unsigned             s,
     const unsigned             y,
     const unsigned             x,
-    const float*  __restrict__ spheroidal,
+    const float*  __restrict__ taper,
     const float2* __restrict__ avg_aterm,
           float2* __restrict__ pixel,
           float2* __restrict__ subgrid)
@@ -120,25 +120,25 @@ __device__ void update_subgrid(
             avg_aterm + i*16, pixel);
     }
 
-    // Load spheroidal
-    float spheroidal_ = spheroidal[i];
+    // Load taper
+    const float taper_ = taper[i];
 
     // Update subgrid
     if (nr_polarizations == 4) {
         for (int pol = 0; pol < 4; pol++) {
             int idx = index_subgrid(4, subgrid_size, s, pol, y_dst, x_dst);
-            subgrid[idx] = pixel[pol] * spheroidal_;
+            subgrid[idx] = pixel[pol] * taper_;
         }
     } else if (nr_polarizations == 1) {
         int idx = index_subgrid(1, subgrid_size, s, 0, y_dst, x_dst);
-        subgrid[idx] = (pixel[0] + pixel[3]) * spheroidal_ * 0.5f;
+        subgrid[idx] = (pixel[0] + pixel[3]) * taper_ * 0.5f;
     }
 }
 
 template<int nr_polarizations>
 __device__ void
     kernel_gridder_(
-    const int                           time_offset_job,
+    const int                           time_offset,
     const int                           grid_size,
     const int                           subgrid_size,
     const float                         image_size,
@@ -152,19 +152,20 @@ __device__ void
     const UVW<float>*      __restrict__ uvw,
     const float*           __restrict__ wavenumbers,
     const float2*          __restrict__ visibilities,
-    const float*           __restrict__ spheroidal,
+    const float*           __restrict__ taper,
     const float2*          __restrict__ aterms,
-    const int*             __restrict__ aterms_indices,
+    const unsigned int*    __restrict__ aterm_indices,
     const Metadata*        __restrict__ metadata,
     const float2*          __restrict__ avg_aterm,
           float2*          __restrict__ subgrid)
 {
     int tid = threadIdx.x;
+    int num_threads = blockDim.x;
     int s = blockIdx.x;
 
 	// Load metadata for current subgrid
     const Metadata &m = metadata[s];
-    const int time_offset_global = m.time_index - time_offset_job;
+    const int time_offset_global = m.time_index - time_offset;
     const int nr_timesteps = m.nr_timesteps;
     const int x_coordinate = m.coordinate.x;
     const int y_coordinate = m.coordinate.y;
@@ -177,7 +178,7 @@ __device__ void
     const float w_offset = w_step * ((float) m.coordinate.z + 0.5) * 2 * M_PI;
 
     // Iterate all pixels in subgrid
-    for (int i = tid; i < ALIGN(subgrid_size * subgrid_size, NUM_THREADS); i += NUM_THREADS * UNROLL_PIXELS) {
+    for (int i = tid; i < ALIGN(subgrid_size * subgrid_size, NUM_THREADS); i += num_threads * UNROLL_PIXELS) {
         float2 pixel_cur[UNROLL_PIXELS][4];
         float2 pixel_sum[UNROLL_PIXELS][4];
 
@@ -189,7 +190,7 @@ __device__ void
         }
 
         // Initialize aterm index to first timestep
-        int aterm_idx_previous = aterms_indices[time_offset_global];
+        unsigned int aterm_idx_previous = aterm_indices[time_offset_global];
 
         // Compute l,m,n, phase_offset
         float l_index[UNROLL_PIXELS];
@@ -198,7 +199,7 @@ __device__ void
         float phase_offset[UNROLL_PIXELS];
 
         for (int j = 0; j < UNROLL_PIXELS; j++) {
-            int i_ = i + j * NUM_THREADS;
+            int i_ = i + j * num_threads;
             int y = i_ / subgrid_size;
             int x = i_ % subgrid_size;
             float l_offset = compute_l(x, subgrid_size, image_size);
@@ -210,38 +211,54 @@ __device__ void
         }
 
         // Iterate timesteps
-        int current_nr_timesteps = BATCH_SIZE / current_nr_channels;
+        int current_nr_timesteps = max(1, BATCH_SIZE / current_nr_channels);
         for (int time_offset_local = 0; time_offset_local < nr_timesteps; time_offset_local += current_nr_timesteps) {
-            current_nr_timesteps = nr_timesteps - time_offset_local < current_nr_timesteps ?
-                                   nr_timesteps - time_offset_local : current_nr_timesteps;
+            current_nr_timesteps = min(current_nr_timesteps, nr_timesteps - time_offset_local);
 
             __syncthreads();
 
             // Load UVW
-            for (int time = tid; time < current_nr_timesteps; time += NUM_THREADS) {
-                UVW<float> a = uvw[time_offset_global + time_offset_local + time];
-                uvw_[time] = make_float4(a.u, a.v, a.w, 0);
+            for (int j = tid; j < current_nr_timesteps; j += num_threads) {
+                int time = time_offset_local + j;
+                if (time < nr_timesteps) {
+                    int idx_time = time_offset_global + time;
+                    UVW<float> a = uvw[idx_time];
+                    uvw_[j] = make_float4(a.u, a.v, a.w, 0);
+                }
             }
 
             // Load visibilities
             if (nr_polarizations == 4) {
-                for (int v = tid; v < current_nr_timesteps*current_nr_channels*2; v += NUM_THREADS) {
+                for (int v = tid; v < current_nr_timesteps*current_nr_channels*2; v += num_threads) {
                     int j = v % 2; // one thread loads either upper or lower float4 part of visibility
                     int k = v / 2;
-                    int idx_time = time_offset_global + time_offset_local + (k / current_nr_channels);
+                    int time = time_offset_local + (k / current_nr_channels);
+                    int idx_time = time_offset_global + time;
                     int idx_chan = channel_offset + (k % current_nr_channels);
                     long idx_vis = index_visibility(4, nr_channels, idx_time, idx_chan, 0);
-                    float4 *vis_ptr = (float4 *) &visibilities[idx_vis];
-                    visibilities_[k][j] = vis_ptr[j];
+                    if (time < nr_timesteps) {
+                        float4 *vis_ptr = (float4 *) &visibilities[idx_vis];
+                        visibilities_[j][k] = vis_ptr[j];
+                    }
                 }
             } else if (nr_polarizations == 1) {
-                // Use only visibilities_[*][0].
-                for (int k = tid; k < current_nr_timesteps*current_nr_channels; k += NUM_THREADS) {
-                    int idx_time = time_offset_global + time_offset_local + (k / current_nr_channels);
+                // Use only visibilities_[0][*]
+                for (int k = tid; k < current_nr_timesteps*current_nr_channels; k += num_threads) {
+                    int time = time_offset_local + (k / current_nr_channels);
+                    int idx_time = time_offset_global + time;
                     int idx_chan = channel_offset + (k % current_nr_channels);
                     long idx_vis = index_visibility(2, nr_channels, idx_time, idx_chan, 0);
-                    float4 *vis_ptr = (float4 *) &visibilities[idx_vis];
-                    visibilities_[k][0] = vis_ptr[0];
+                    if (time < nr_timesteps) {
+                        float4 *vis_ptr = (float4 *) &visibilities[idx_vis];
+                        visibilities_[0][k].x = vis_ptr[0].x;
+                        visibilities_[0][k].y = vis_ptr[0].y;
+                        visibilities_[0][k].z = 0.0;
+                        visibilities_[0][k].w = 0.0;
+                        visibilities_[1][k].x = 0.0;
+                        visibilities_[1][k].y = 0.0;
+                        visibilities_[1][k].z = vis_ptr[0].z;
+                        visibilities_[1][k].w = vis_ptr[0].w;
+                    }
                 }
             }
 
@@ -252,14 +269,14 @@ __device__ void
 
                 // Get aterm index for current timestep
                 int time_current = time_offset_global + time_offset_local + time;
-                int aterm_idx_current = aterms_indices[time_current];
+                const unsigned int aterm_idx_current = aterm_indices[time_current];
 
                 // Determine whether aterm has changed
                 bool aterm_changed = aterm_idx_previous != aterm_idx_current;
 
                 if (aterm_changed) {
                     for (int j = 0; j < UNROLL_PIXELS; j++) {
-                        int i_ = i + j * NUM_THREADS;
+                        int i_ = i + j * num_threads;
                         int y = i_ / subgrid_size;
                         int x = i_ % subgrid_size;
 
@@ -286,46 +303,34 @@ __device__ void
                 float v = uvw_[time].y;
                 float w = uvw_[time].z;
 
-                // Compute phase index and phase offset
+                // Compute phase index
                 float phase_index[UNROLL_PIXELS];
 
                 for (int j = 0; j < UNROLL_PIXELS; j++) {
-                    phase_index[j] = u*l_index[j] + v*m_index[j] + w*n[j];
+                    phase_index[j] = -(u*l_index[j] + v*m_index[j] + w*n[j]);
                 }
 
-                #pragma unroll
-                for (int chan = 0; chan < current_nr_channels; chan++) {
-                    float wavenumber = wavenumbers[channel_offset + chan];
-
-                    // Load visibilities from shared memory
-                    float4 a = visibilities_[time*current_nr_channels+chan][0];
-                    float4 b = visibilities_[time*current_nr_channels+chan][1];
-                    float2 visXX = make_float2(a.x, a.y);
-                    float2 visXY = make_float2(a.z, a.w);
-                    float2 visYX = make_float2(b.x, b.y);
-                    float2 visYY = make_float2(b.z, b.w);
-
-                    for (int j = 0; j < UNROLL_PIXELS; j++) {
-                        // Compute phasor
-                        float phase = phase_offset[j] - (phase_index[j] * wavenumber);
-                        float2 phasor = make_float2(raw_cos(phase), raw_sin(phase));
-
-                        // Multiply visibility by phasor
-                        cmac(pixel_cur[j][0], phasor, visXX);
-                        if (nr_polarizations == 4) {
-                            cmac(pixel_cur[j][1], phasor, visXY);
-                            cmac(pixel_cur[j][2], phasor, visYX);
-                            cmac(pixel_cur[j][3], phasor, visYY);
-                        } else if (nr_polarizations == 1) {
-                            cmac(pixel_cur[j][3], phasor, visXY);
-                        }
-                    }
-                } // end for chan
+                // Compute pixel
+                #if USE_EXTRAPOLATE
+                compute_reduction_extrapolate<UNROLL_PIXELS>(
+                    current_nr_channels, nr_polarizations,
+                    wavenumbers + channel_offset, phase_index, phase_offset,
+                    &visibilities_[0][time*current_nr_channels],
+                    &visibilities_[1][time*current_nr_channels],
+                    reinterpret_cast<float2*>(pixel_cur), 1, 1);
+                #else
+                compute_reduction(
+                    current_nr_channels, UNROLL_PIXELS, nr_polarizations,
+                    wavenumbers + channel_offset, phase_index, phase_offset,
+                    &visibilities_[0][time*current_nr_channels],
+                    &visibilities_[1][time*current_nr_channels],
+                    reinterpret_cast<float2*>(pixel_cur), 1, 1);
+                #endif
             } // end for time
         } // end for time_offset_local
 
         for (int j = 0; j < UNROLL_PIXELS; j++) {
-            int i_ = i + j * NUM_THREADS;
+            int i_ = i + j * num_threads;
             int y = i_ / subgrid_size;
             int x = i_ % subgrid_size;
 
@@ -336,7 +341,7 @@ __device__ void
                     &pixel_cur[j][0], &pixel_sum[j][0]);
                 update_subgrid<nr_polarizations>(
                     subgrid_size, s, y, x,
-                    spheroidal, avg_aterm, &pixel_sum[j][0], subgrid);
+                    taper, avg_aterm, &pixel_sum[j][0], subgrid);
             }
         }
     } // end for i (pixels)
@@ -348,25 +353,25 @@ __global__
 __launch_bounds__(NUM_THREADS, NUM_BLOCKS)
 #endif
 void kernel_gridder(
-        const int                      time_offset,
-        const int                      nr_polarizations,
-        const int                      grid_size,
-        const int                      subgrid_size,
-        const float                    image_size,
-        const float                    w_step,
-        const float                    shift_l,
-        const float                    shift_m,
-        const int                      nr_channels,
-        const int                      nr_stations,
-        const UVW<float>* __restrict__ uvw,
-        const float*      __restrict__ wavenumbers,
-              float2*     __restrict__ visibilities,
-        const float*      __restrict__ spheroidal,
-        const float2*     __restrict__ aterms,
-        const int*        __restrict__ aterms_indices,
-        const Metadata*   __restrict__ metadata,
-        const float2*     __restrict__ avg_aterm,
-              float2*     __restrict__ subgrid)
+        const int                        time_offset,
+        const int                        nr_polarizations,
+        const int                        grid_size,
+        const int                        subgrid_size,
+        const float                      image_size,
+        const float                      w_step,
+        const float                      shift_l,
+        const float                      shift_m,
+        const int                        nr_channels,
+        const int                        nr_stations,
+        const UVW<float>*   __restrict__ uvw,
+        const float*        __restrict__ wavenumbers,
+        const float2*       __restrict__ visibilities,
+        const float*        __restrict__ taper,
+        const float2*       __restrict__ aterms,
+        const unsigned int* __restrict__ aterm_indices,
+        const Metadata*     __restrict__ metadata,
+        const float2*       __restrict__ avg_aterm,
+              float2*       __restrict__ subgrid)
 {
     int s                   = blockIdx.x;
     const Metadata &m       = metadata[s];
@@ -380,13 +385,13 @@ void kernel_gridder(
         kernel_gridder_<1>(
             time_offset, grid_size, subgrid_size, image_size, w_step,
             shift_l, shift_m, nr_channels, current_nr_channels, channel_offset, nr_stations,
-            uvw, wavenumbers, visibilities, spheroidal, aterms, aterms_indices,
+            uvw, wavenumbers, visibilities, taper, aterms, aterm_indices,
             metadata, avg_aterm, subgrid);
     }  else {
         kernel_gridder_<4>(
             time_offset, grid_size, subgrid_size, image_size, w_step,
             shift_l, shift_m, nr_channels, current_nr_channels, channel_offset, nr_stations,
-            uvw, wavenumbers, visibilities, spheroidal, aterms, aterms_indices,
+            uvw, wavenumbers, visibilities, taper, aterms, aterm_indices,
             metadata, avg_aterm, subgrid);
     }
 }

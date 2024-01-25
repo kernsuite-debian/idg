@@ -4,19 +4,18 @@
 #include "GenericOptimized.h"
 
 #include <cuda.h>
-#include <cudaProfiler.h>
 
 #include <algorithm>  // max_element
 #include <mutex>
 #include <csignal>
 
 #include "InstanceCUDA.h"
+#include "kernels/KernelGridder.cuh"
 
 using namespace idg::proxy::cuda;
 using namespace idg::proxy::cpu;
 using namespace idg::kernel::cpu;
 using namespace idg::kernel::cuda;
-using namespace powersensor;
 
 namespace idg {
 namespace proxy {
@@ -48,8 +47,6 @@ GenericOptimized::GenericOptimized() : CUDA(default_info()) {
   set_disable_wtiling_gpu(getenv("DISABLE_WTILING_GPU"));
 
   omp_set_nested(true);
-
-  cuProfilerStart();
 }
 
 // Destructor
@@ -59,28 +56,38 @@ GenericOptimized::~GenericOptimized() {
 #endif
 
   delete cpuProxy;
-  cuProfilerStop();
 }
 
 /*
  * Plan
  */
 std::unique_ptr<Plan> GenericOptimized::make_plan(
-    const int kernel_size, const Array1D<float>& frequencies,
-    const Array2D<UVW<float>>& uvw,
-    const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
-    const Array1D<unsigned int>& aterms_offsets, Plan::Options options) {
+    const int kernel_size, const aocommon::xt::Span<float, 1>& frequencies,
+    const aocommon::xt::Span<UVW<float>, 2>& uvw,
+    const aocommon::xt::Span<std::pair<unsigned int, unsigned int>, 1>&
+        baselines,
+    const aocommon::xt::Span<unsigned int, 1>& aterm_offsets,
+    Plan::Options options) {
   if (!m_disable_wtiling && !m_disable_wtiling_gpu) {
     options.w_step = m_cache_state.w_step;
     options.nr_w_layers = INT_MAX;
+    // The number of channels per channel group should not exceed the number of
+    // threads in a thread block for the CUDA gridder kernel
+    options.max_nr_channels_per_subgrid =
+        options.max_nr_channels_per_subgrid
+            ? min(options.max_nr_channels_per_subgrid,
+                  KernelGridder::block_size_x)
+            : KernelGridder::block_size_x;
+    const size_t grid_size = get_grid().shape(2);
+    assert(get_grid().shape(3) == grid_size);
     return std::unique_ptr<Plan>(
-        new Plan(kernel_size, m_cache_state.subgrid_size, m_grid->get_y_dim(),
+        new Plan(kernel_size, m_cache_state.subgrid_size, grid_size,
                  m_cache_state.cell_size, m_cache_state.shift, frequencies, uvw,
-                 baselines, aterms_offsets, m_wtiles, options));
+                 baselines, aterm_offsets, m_wtiles, options));
   } else {
     // Defer call to cpuProxy
     return cpuProxy->make_plan(kernel_size, frequencies, uvw, baselines,
-                               aterms_offsets, options);
+                               aterm_offsets, options);
   }
 }
 
@@ -88,13 +95,14 @@ std::unique_ptr<Plan> GenericOptimized::make_plan(
  * Gridding
  */
 void GenericOptimized::do_gridding(
-    const Plan& plan, const Array1D<float>& frequencies,
-    const Array4D<std::complex<float>>& visibilities,
-    const Array2D<UVW<float>>& uvw,
-    const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
-    const Array4D<Matrix2x2<std::complex<float>>>& aterms,
-    const Array1D<unsigned int>& aterms_offsets,
-    const Array2D<float>& spheroidal) {
+    const Plan& plan, const aocommon::xt::Span<float, 1>& frequencies,
+    const aocommon::xt::Span<std::complex<float>, 4>& visibilities,
+    const aocommon::xt::Span<UVW<float>, 2>& uvw,
+    const aocommon::xt::Span<std::pair<unsigned int, unsigned int>, 1>&
+        baselines,
+    const aocommon::xt::Span<Matrix2x2<std::complex<float>>, 4>& aterms,
+    const aocommon::xt::Span<unsigned int, 1>& aterm_offsets,
+    const aocommon::xt::Span<float, 2>& taper) {
 #if defined(DEBUG)
   std::cout << "GenericOptimized::" << __func__ << std::endl;
 #endif
@@ -104,24 +112,26 @@ void GenericOptimized::do_gridding(
   // We therefore need to const_cast it although it is used read-only during
   // gridding.
   auto& visibilities_ptr =
-      const_cast<Array4D<std::complex<float>>&>(visibilities);
-  run_imaging(plan, frequencies, visibilities_ptr, uvw, baselines, *m_grid,
-              aterms, aterms_offsets, spheroidal, ImagingMode::mode_gridding);
+      const_cast<aocommon::xt::Span<std::complex<float>, 4>&>(visibilities);
+  run_imaging(plan, frequencies, visibilities_ptr, uvw, baselines, get_grid(),
+              aterms, aterm_offsets, taper, ImagingMode::mode_gridding);
 }  // end do_gridding
 
 void GenericOptimized::do_degridding(
-    const Plan& plan, const Array1D<float>& frequencies,
-    Array4D<std::complex<float>>& visibilities, const Array2D<UVW<float>>& uvw,
-    const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
-    const Array4D<Matrix2x2<std::complex<float>>>& aterms,
-    const Array1D<unsigned int>& aterms_offsets,
-    const Array2D<float>& spheroidal) {
+    const Plan& plan, const aocommon::xt::Span<float, 1>& frequencies,
+    aocommon::xt::Span<std::complex<float>, 4>& visibilities,
+    const aocommon::xt::Span<UVW<float>, 2>& uvw,
+    const aocommon::xt::Span<std::pair<unsigned int, unsigned int>, 1>&
+        baselines,
+    const aocommon::xt::Span<Matrix2x2<std::complex<float>>, 4>& aterms,
+    const aocommon::xt::Span<unsigned int, 1>& aterm_offsets,
+    const aocommon::xt::Span<float, 2>& taper) {
 #if defined(DEBUG)
   std::cout << "GenericOptimized::" << __func__ << std::endl;
 #endif
 
-  run_imaging(plan, frequencies, visibilities, uvw, baselines, *m_grid, aterms,
-              aterms_offsets, spheroidal, ImagingMode::mode_degridding);
+  run_imaging(plan, frequencies, visibilities, uvw, baselines, get_grid(),
+              aterms, aterm_offsets, taper, ImagingMode::mode_degridding);
 }  // end do_degridding
 
 /*
@@ -142,15 +152,16 @@ void GenericOptimized::do_transform(DomainAtoDomainB direction) {
 /*
  * Grid
  */
-void GenericOptimized::set_grid(std::shared_ptr<Grid> grid) {
+void GenericOptimized::set_grid(
+    aocommon::xt::Span<std::complex<float>, 4>& grid) {
   cpuProxy->set_grid(grid);
   CUDA::set_grid(grid);
 }
 
-std::shared_ptr<Grid> GenericOptimized::get_final_grid() {
+aocommon::xt::Span<std::complex<float>, 4>& GenericOptimized::get_final_grid() {
   if (!m_disable_wtiling_gpu) {
     flush_wtiles();
-    return m_grid;
+    return get_grid();
   } else {
     // Defer call to cpuProxy
     return cpuProxy->get_final_grid();
@@ -161,7 +172,8 @@ std::shared_ptr<Grid> GenericOptimized::get_final_grid() {
  * Cache
  */
 void GenericOptimized::init_cache(int subgrid_size, float cell_size,
-                                  float w_step, const Array1D<float>& shift) {
+                                  float w_step,
+                                  const std::array<float, 2>& shift) {
   // Initialize cache
   Proxy::init_cache(subgrid_size, cell_size, w_step, shift);
 

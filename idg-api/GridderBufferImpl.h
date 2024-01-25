@@ -57,7 +57,7 @@ class BufferSetImpl;
 class GridderBufferImpl : public virtual GridderBuffer, public BufferImpl {
  public:
   // Constructors and destructor
-  GridderBufferImpl(const BufferSetImpl &bufferset, size_t bufferTimesteps);
+  GridderBufferImpl(const BufferSetImpl& bufferset, size_t bufferTimesteps);
 
   virtual ~GridderBufferImpl();
 
@@ -71,15 +71,15 @@ class GridderBufferImpl : public virtual GridderBuffer, public BufferImpl {
    * std::complex<float>[NR_CHANNELS][NR_CORRELATIONS]
    */
   void grid_visibilities(size_t timeIndex, size_t antenna1, size_t antenna2,
-                         const double *uvwInMeters,
-                         const std::complex<float> *visibilities,
-                         const float *weights);
+                         const double* uvwInMeters,
+                         const std::complex<float>* visibilities,
+                         const float* weights);
 
   /** \brief Configure computing average beams.
    *  \param beam Pointer to average beam data. If the pointer is null,
    *         average beam computations are disabled.
    */
-  void set_avg_beam(std::complex<float> *average_beam) {
+  void set_avg_beam(std::complex<float>* average_beam) {
     m_average_beam = average_beam;
   }
 
@@ -101,12 +101,16 @@ class GridderBufferImpl : public virtual GridderBuffer, public BufferImpl {
 
  private:
   // secondary buffers
-  Array2D<UVW<float>> m_bufferUVW2;  // BL x TI
-  Array1D<std::pair<unsigned int, unsigned int>> m_bufferStationPairs2;  // BL
-  Array4D<std::complex<float>> m_bufferVisibilities2;     // BL x TI x CH x CR
+  aocommon::xt::Span<UVW<float>, 2> m_bufferUVW2;  // BL x TI
+  aocommon::xt::Span<std::pair<unsigned int, unsigned int>, 1>
+      m_bufferStationPairs2;  // BL
+  aocommon::xt::Span<std::complex<float>, 4>
+      m_bufferVisibilities2;                              // BL x TI x CH x CR
   std::vector<Matrix2x2<std::complex<float>>> m_aterms2;  // ST x SB x SB
-  Array4D<float> m_buffer_weights;   // BL x TI x NR_CHANNELS x NR_CORRELATIONS
-  Array4D<float> m_buffer_weights2;  // BL x TI x NR_CHANNELS x NR_CORRELATIONS
+  aocommon::xt::Span<float, 4>
+      m_buffer_weights;  // BL x TI x NR_CHANNELS x NR_CORRELATIONS
+  aocommon::xt::Span<float, 4>
+      m_buffer_weights2;  // BL x TI x NR_CHANNELS x NR_CORRELATIONS
   std::vector<unsigned int> m_aterm_offsets2;
 
   std::thread m_flush_thread;
@@ -114,7 +118,7 @@ class GridderBufferImpl : public virtual GridderBuffer, public BufferImpl {
 
   // Pointer to average beam data in the parent BufferSet.
   // If it is null, compute_avg_beam() will not run.
-  std::complex<float> *m_average_beam;
+  std::complex<float>* m_average_beam;
 };
 
 }  // namespace api

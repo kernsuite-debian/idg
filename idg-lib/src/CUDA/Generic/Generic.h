@@ -7,10 +7,6 @@
 #include "idg-common.h"
 #include "CUDA/common/CUDA.h"
 
-namespace powersensor {
-class PowerSensor;
-}
-
 namespace idg {
 namespace proxy {
 namespace cuda {
@@ -28,50 +24,55 @@ class Generic : public CUDA {
 
  private:
   void do_gridding(
-      const Plan& plan, const Array1D<float>& frequencies,
-      const Array4D<std::complex<float>>& visibilities,
-      const Array2D<UVW<float>>& uvw,
-      const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
-      const Array4D<Matrix2x2<std::complex<float>>>& aterms,
-      const Array1D<unsigned int>& aterms_offsets,
-      const Array2D<float>& spheroidal) override;
+      const Plan& plan, const aocommon::xt::Span<float, 1>& frequencies,
+      const aocommon::xt::Span<std::complex<float>, 4>& visibilities,
+      const aocommon::xt::Span<UVW<float>, 2>& uvw,
+      const aocommon::xt::Span<std::pair<unsigned int, unsigned int>, 1>&
+          baselines,
+      const aocommon::xt::Span<Matrix2x2<std::complex<float>>, 4>& aterms,
+      const aocommon::xt::Span<unsigned int, 1>& aterm_offsets,
+      const aocommon::xt::Span<float, 2>& taper) override;
 
   void do_degridding(
-      const Plan& plan, const Array1D<float>& frequencies,
-      Array4D<std::complex<float>>& visibilities,
-      const Array2D<UVW<float>>& uvw,
-      const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
-      const Array4D<Matrix2x2<std::complex<float>>>& aterms,
-      const Array1D<unsigned int>& aterms_offsets,
-      const Array2D<float>& spheroidal) override;
+      const Plan& plan, const aocommon::xt::Span<float, 1>& frequencies,
+      aocommon::xt::Span<std::complex<float>, 4>& visibilities,
+      const aocommon::xt::Span<UVW<float>, 2>& uvw,
+      const aocommon::xt::Span<std::pair<unsigned int, unsigned int>, 1>&
+          baselines,
+      const aocommon::xt::Span<Matrix2x2<std::complex<float>>, 4>& aterms,
+      const aocommon::xt::Span<unsigned int, 1>& aterm_offsets,
+      const aocommon::xt::Span<float, 2>& taper) override;
 
   void do_transform(DomainAtoDomainB direction) override;
 
   void run_imaging(
-      const Plan& plan, const Array1D<float>& frequencies,
-      const Array4D<std::complex<float>>& visibilities,
-      const Array2D<UVW<float>>& uvw,
-      const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
-      Grid& grid, const Array4D<Matrix2x2<std::complex<float>>>& aterms,
-      const Array1D<unsigned int>& aterms_offsets,
-      const Array2D<float>& spheroidal, ImagingMode mode);
+      const Plan& plan, const aocommon::xt::Span<float, 1>& frequencies,
+      const aocommon::xt::Span<std::complex<float>, 4>& visibilities,
+      const aocommon::xt::Span<UVW<float>, 2>& uvw,
+      const aocommon::xt::Span<std::pair<unsigned int, unsigned int>, 1>&
+          baselines,
+      aocommon::xt::Span<std::complex<float>, 4>& grid,
+      const aocommon::xt::Span<Matrix2x2<std::complex<float>>, 4>& aterms,
+      const aocommon::xt::Span<unsigned int, 1>& aterm_offsets,
+      const aocommon::xt::Span<float, 2>& taper, ImagingMode mode);
 
  public:
   bool do_supports_wtiling() override { return true; }
 
-  void set_grid(std::shared_ptr<Grid> grid) override;
+  void set_grid(aocommon::xt::Span<std::complex<float>, 4>& grid) override;
 
-  std::shared_ptr<Grid> get_final_grid() override;
+  aocommon::xt::Span<std::complex<float>, 4>& get_final_grid() override;
 
   virtual std::unique_ptr<Plan> make_plan(
-      const int kernel_size, const Array1D<float>& frequencies,
-      const Array2D<UVW<float>>& uvw,
-      const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
-      const Array1D<unsigned int>& aterms_offsets,
+      const int kernel_size, const aocommon::xt::Span<float, 1>& frequencies,
+      const aocommon::xt::Span<UVW<float>, 2>& uvw,
+      const aocommon::xt::Span<std::pair<unsigned int, unsigned int>, 1>&
+          baselines,
+      const aocommon::xt::Span<unsigned int, 1>& aterm_offsets,
       Plan::Options options) override;
 
   void init_cache(int subgrid_size, float cell_size, float w_step,
-                  const Array1D<float>& shift) override;
+                  const std::array<float, 2>& shift) override;
 
  private:
   std::unique_ptr<cu::DeviceMemory> d_grid_;

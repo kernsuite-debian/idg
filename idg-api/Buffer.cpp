@@ -31,19 +31,21 @@ BufferImpl::BufferImpl(const BufferSetImpl& bufferset, size_t bufferTimesteps)
       m_timeStartNextBatch(bufferTimesteps),
       m_nrStations(0),
       m_nr_baselines(0),
-      m_shift(2),
+      m_shift{0, 0},
       m_default_aterm_offsets(2),
-      m_aterm_offsets_array(0),
-      m_frequencies(0),
-      m_aterms_array(0, 0, 0, 0),
-      m_bufferUVW(0, 0),
-      m_bufferStationPairs(0),
-      m_bufferVisibilities(0, 0, 0) {
+      m_frequencies(aocommon::xt::CreateSpan<float, 1>(nullptr, {0})),
+      m_bufferUVW(
+          aocommon::xt::CreateSpan<idg::UVW<float>, 2>(nullptr, {0, 0})),
+      m_bufferStationPairs(
+          aocommon::xt::CreateSpan<std::pair<unsigned int, unsigned int>, 1>(
+              nullptr, {0})),
+      m_bufferVisibilities(aocommon::xt::CreateSpan<std::complex<float>, 4>(
+          nullptr, {0, 0, 0, 0})) {
 #if defined(DEBUG)
   cout << __func__ << endl;
 #endif
-  assert(bufferset.get_proxy().get_grid().get_x_dim() ==
-         bufferset.get_proxy().get_grid().get_y_dim());
+  assert(bufferset.get_proxy().get_grid().shape(2) ==
+         bufferset.get_proxy().get_grid().shape(3));
 
   assert(bufferset.get_shift().size() == 2);
   std::copy_n(bufferset.get_shift().data(), m_shift.size(), m_shift.data());
@@ -69,15 +71,18 @@ void BufferImpl::set_stations(const size_t nrStations) {
 size_t BufferImpl::get_stations() const { return m_nrStations; }
 
 double BufferImpl::get_image_size() const {
-  return m_bufferset.get_cell_size() *
-         m_bufferset.get_proxy().get_grid().get_y_dim();
+  aocommon::xt::Span<std::complex<float>, 4> grid =
+      m_bufferset.get_proxy().get_grid();
+  const size_t grid_size = grid.shape(2);
+  assert(grid.shape(3) == grid_size);
+  return m_bufferset.get_cell_size() * grid_size;
 }
 
 void BufferImpl::set_frequencies(size_t nr_channels,
                                  const double* frequencyList) {
   m_nr_channels = nr_channels;
   m_frequencies =
-      m_bufferset.get_proxy().allocate_array1d<float>(m_nr_channels);
+      m_bufferset.get_proxy().allocate_span<float, 1>({m_nr_channels});
   for (int i = 0; i < m_nr_channels; i++) {
     m_frequencies(i) = frequencyList[i];
   }
@@ -86,19 +91,15 @@ void BufferImpl::set_frequencies(size_t nr_channels,
 void BufferImpl::set_frequencies(const std::vector<double>& frequency_list) {
   m_nr_channels = frequency_list.size();
   m_frequencies =
-      m_bufferset.get_proxy().allocate_array1d<float>(m_nr_channels);
-  for (int i = 0; i < m_nr_channels; i++) {
-    m_frequencies(i) = frequency_list[i];
-  }
+      m_bufferset.get_proxy().allocate_span<float, 1>({m_nr_channels});
+  m_frequencies = xt::adapt(frequency_list);
 }
 
 double BufferImpl::get_frequency(const size_t channel) const {
   return m_frequencies(channel);
 }
 
-size_t BufferImpl::get_frequencies_size() const {
-  return m_frequencies.get_x_dim();
-}
+size_t BufferImpl::get_frequencies_size() const { return m_frequencies.size(); }
 
 // Plan creation and helper functions
 
@@ -113,31 +114,30 @@ void BufferImpl::bake() {
 }
 
 void BufferImpl::malloc_buffers() {
-  const int nr_correlations = m_bufferset.get_nr_correlations();
+  const size_t nr_correlations = m_bufferset.get_nr_correlations();
   proxy::Proxy& proxy = m_bufferset.get_proxy();
   m_bufferUVW =
-      proxy.allocate_array2d<UVW<float>>(m_nr_baselines, m_bufferTimesteps);
-  m_bufferVisibilities = proxy.allocate_array4d<std::complex<float>>(
-      m_nr_baselines, m_bufferTimesteps, m_nr_channels, nr_correlations);
+      proxy.allocate_span<UVW<float>, 2>({m_nr_baselines, m_bufferTimesteps});
+  m_bufferVisibilities = proxy.allocate_span<std::complex<float>, 4>(
+      {m_nr_baselines, m_bufferTimesteps, m_nr_channels, nr_correlations});
   m_bufferStationPairs =
-      proxy.allocate_array1d<std::pair<unsigned int, unsigned int>>(
-          m_nr_baselines);
-  m_bufferStationPairs.init({m_nrStations, m_nrStations});
-  // already done: m_spheroidal.reserve(subgridsize, subgridsize);
-  // m_aterms = Array4D<Matrix2x2<std::complex<float>>>(1, m_nrStations,
-  // subgridsize, subgridsize);
+      proxy.allocate_span<std::pair<unsigned int, unsigned int>, 1>(
+          {m_nr_baselines});
+  m_bufferStationPairs.fill(
+      std::pair<unsigned int, unsigned int>(m_nrStations, m_nrStations));
+  // m_aterms is already allocated in BufferImpl::init_default_aterm
 }
 
 void BufferImpl::reset_buffers() {
-  m_bufferVisibilities.zero();
+  m_bufferVisibilities.fill(std::complex<float>(0, 0));
   set_uvw_to_infinity();
   init_default_aterm();
 }
 
 void BufferImpl::set_uvw_to_infinity() {
-  m_bufferUVW.init({std::numeric_limits<float>::infinity(),
-                    std::numeric_limits<float>::infinity(),
-                    std::numeric_limits<float>::infinity()});
+  m_bufferUVW.fill(UVW<float>{std::numeric_limits<float>::infinity(),
+                              std::numeric_limits<float>::infinity(),
+                              std::numeric_limits<float>::infinity()});
 }
 
 void BufferImpl::init_default_aterm() {
@@ -150,12 +150,6 @@ void BufferImpl::init_default_aterm() {
 // Set the a-term that starts validity at timeIndex
 void BufferImpl::set_aterm(size_t timeIndex,
                            const std::complex<float>* aterms) {
-#if defined(BUILD_LIB_OPENCL)
-  if (dynamic_cast<proxy::opencl::Generic*>(&m_bufferset.get_proxy())) {
-    throw std::runtime_error("OpenCL kernels do not support Aterms");
-  }
-#endif
-
   const auto* const local_aterms =
       reinterpret_cast<decltype(m_aterms)::const_pointer>(aterms);
   const int local_time = timeIndex - m_timeStartThisBatch;

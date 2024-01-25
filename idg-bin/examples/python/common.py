@@ -65,10 +65,10 @@ def get_nr_baselines():
 ###########
 def plot_metadata(
         kernel_size, subgrid_size, grid_size, cell_size, image_size,
-        frequencies, uvw, baselines, aterms_offsets):
+        frequencies, uvw, baselines, aterm_offsets):
     plan = idg.Plan(
         kernel_size, subgrid_size, grid_size, cell_size,
-        frequencies, uvw, baselines, aterms_offsets)
+        frequencies, uvw, baselines, aterm_offsets)
     nr_subgrids = plan.get_nr_subgrids()
     metadata = numpy.zeros(nr_subgrids, dtype = idg.metadatatype)
     plan.copy_metadata(metadata)
@@ -80,10 +80,10 @@ def plot_metadata(
 ##########
 def gridding(
         p, w_step, shift, cell_size, kernel_size, subgrid_size, frequencies, visibilities,
-        uvw, baselines, grid, aterms, aterms_offsets, spheroidal):
+        uvw, baselines, grid, aterms, aterm_offsets, taper):
     p.gridding(
         kernel_size, frequencies, visibilities, uvw, baselines,
-        aterms, aterms_offsets, spheroidal)
+        aterms, aterm_offsets, taper)
     p.get_final_grid(grid)
     util.plot_grid(grid, scaling='log')
     p.transform(idg.FourierDomainToImageDomain)
@@ -97,11 +97,11 @@ def gridding(
 ############
 def degridding(
         p, w_step, shift, cell_size, kernel_size, subgrid_size, frequencies, visibilities,
-        uvw, baselines, grid, aterms, aterms_offsets, spheroidal):
+        uvw, baselines, grid, aterms, aterm_offsets, taper):
     p.transform(idg.ImageDomainToFourierDomain)
     p.degridding(
         kernel_size, frequencies, visibilities, uvw, baselines,
-        aterms, aterms_offsets, spheroidal)
+        aterms, aterm_offsets, taper)
     #util.plot_visibilities(visibilities)
 
 
@@ -195,9 +195,9 @@ def main(proxyname):
 
     aterms         = util.get_identity_aterms(
                         nr_timeslots, nr_stations, subgrid_size, 4)
-    aterms_offsets = util.get_example_aterms_offset(
+    aterm_offsets = util.get_example_aterm_offsets(
                         nr_timeslots, nr_timesteps)
-    spheroidal     = util.get_identity_spheroidal(subgrid_size)
+    taper     = util.get_identity_taper(subgrid_size)
     visibilities   = util.get_example_visibilities(
                         nr_baselines, nr_timesteps, nr_channels, nr_correlations,
                         image_size, grid_size, uvw, frequencies)
@@ -210,11 +210,11 @@ def main(proxyname):
     # util.plot_uvw_pixels(uvw, frequencies, image_size)
     # util.plot_tiles(uvw, frequencies, image_size, grid_size, 128)
     # util.plot_frequencies(frequencies)
-    # util.plot_spheroidal(spheroidal)
+    # util.plot_taper(taper)
     # util.plot_visibilities(visibilities)
     # plot_metadata(
     #     kernel_size, subgrid_size, grid_size, cell_size, image_size,
-    #     frequencies, uvw, baselines, aterms_offsets)
+    #     frequencies, uvw, baselines, aterm_offsets)
 
     ######################################################################
     # routines
@@ -223,10 +223,10 @@ def main(proxyname):
 
     gridding(
         p, w_step, shift, cell_size, kernel_size, subgrid_size, frequencies, visibilities,
-        uvw, baselines, grid, aterms, aterms_offsets, spheroidal)
+        uvw, baselines, grid, aterms, aterm_offsets, taper)
 
     degridding(
         p, w_step, shift, cell_size, kernel_size, subgrid_size, frequencies, visibilities,
-        uvw, baselines, grid, aterms, aterms_offsets, spheroidal)
+        uvw, baselines, grid, aterms, aterm_offsets, taper)
 
     plt.show()
