@@ -81,24 +81,22 @@ uint64_t sizeof_subgrids(unsigned int nr_subgrids, unsigned int subgrid_size,
 
 uint64_t sizeof_metadata(unsigned int nr_subgrids);
 
-uint64_t sizeof_grid(unsigned int grid_size, uint64_t nr_correlations);
-
 uint64_t sizeof_wavenumbers(unsigned int nr_channels);
 
 uint64_t sizeof_aterms(unsigned int nr_stations, unsigned int nr_timeslots,
                        unsigned int subgrid_size, uint64_t nr_correlations = 4);
 
-uint64_t sizeof_aterms_indices(unsigned int nr_baselines,
-                               unsigned int nr_timesteps);
+uint64_t sizeof_aterm_indices(unsigned int nr_baselines,
+                              unsigned int nr_timesteps);
 
-uint64_t sizeof_spheroidal(unsigned int subgrid_size);
+uint64_t sizeof_taper(unsigned int subgrid_size);
 
 uint64_t sizeof_avg_aterm_correction(unsigned int subgrid_size,
                                      uint64_t nr_correlations = 4);
 
 uint64_t sizeof_baselines(unsigned int nr_baselines);
 
-uint64_t sizeof_aterms_offsets(unsigned int nr_timeslots);
+uint64_t sizeof_aterm_offsets(unsigned int nr_timeslots);
 
 uint64_t sizeof_weights(unsigned int nr_baselines, unsigned int nr_timesteps,
                         unsigned int nr_channels,
@@ -107,8 +105,8 @@ uint64_t sizeof_weights(unsigned int nr_baselines, unsigned int nr_timesteps,
 /*
     Misc
 */
-std::vector<int> split_int(const char *string, const char *delimiter);
-std::vector<std::string> split_string(char *string, const char *delimiter);
+std::vector<int> split_int(const char* string, const char* delimiter);
+std::vector<std::string> split_string(char* string, const char* delimiter);
 
 std::string get_inc_dir();
 std::string get_lib_dir();
@@ -127,22 +125,22 @@ size_t get_free_memory();
 class Memory {
  public:
   virtual ~Memory() {}
-  Memory(const Memory &) = delete;
-  Memory(Memory &&) = delete;
-  Memory &operator=(const Memory &) = delete;
-  Memory &operator=(Memory &&) = delete;
+  Memory(const Memory&) = delete;
+  Memory(Memory&&) = delete;
+  Memory& operator=(const Memory&) = delete;
+  Memory& operator=(Memory&&) = delete;
 
-  void *data() { return ptr_; };
+  void* data() { return ptr_; };
   size_t size() { return size_; };
-  virtual void zero() { std::fill_n(static_cast<char *>(data()), size(), 0); };
+  virtual void zero() { std::fill_n(static_cast<char*>(data()), size(), 0); };
 
  protected:
   explicit Memory(size_t size) : size_(size) {}
-  Memory(void *ptr, size_t size) : ptr_(ptr) {}
-  void set(void *ptr) { ptr_ = ptr; }
+  Memory(void* ptr, size_t size) : ptr_(ptr) {}
+  void set(void* ptr) { ptr_ = ptr; }
 
  private:
-  void *ptr_ = nullptr;
+  void* ptr_ = nullptr;
   size_t size_ = 0;
 };
 

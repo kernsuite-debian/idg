@@ -14,8 +14,8 @@
 //#define PRINT_ERRORS
 
 // computes sqrt(A^2-B^2) / n
-float get_accuracy(const int n, const std::complex<float> *A,
-                   const std::complex<float> *B) {
+float get_accuracy(const int n, const std::complex<float>* A,
+                   const std::complex<float>* B) {
   double r_error = 0.0;
   double i_error = 0.0;
   int nnz = 0;
@@ -76,7 +76,7 @@ void print_parameters(unsigned int nr_stations, unsigned int nr_channels,
                       unsigned int subgrid_size, unsigned int kernel_size) {
   const int fw1 = 30;
   const int fw2 = 10;
-  std::ostream &os = std::clog;
+  std::ostream& os = std::clog;
 
   os << "-----------" << std::endl;
   os << "PARAMETERS:" << std::endl;
@@ -109,7 +109,7 @@ void print_parameters(unsigned int nr_stations, unsigned int nr_channels,
 }
 
 // Run gridding and degridding and compare the outcome.
-int compare(idg::proxy::Proxy &proxy1, idg::proxy::Proxy &proxy2, float tol) {
+int compare(idg::proxy::Proxy& proxy1, idg::proxy::Proxy& proxy2, float tol) {
   int info = 0;
 
   // Parameters
@@ -124,7 +124,7 @@ int compare(idg::proxy::Proxy &proxy1, idg::proxy::Proxy &proxy2, float tol) {
   unsigned int kernel_size = 9;
   unsigned int nr_baselines = (nr_stations * (nr_stations - 1)) / 2;
   float integration_time = 1.0f;
-  const char *layout_file = "LOFAR_lba.txt";
+  const char* layout_file = "LOFAR_lba.txt";
 
   idg::Data data = idg::get_example_data(
       nr_baselines, grid_size, integration_time, nr_channels, layout_file);
@@ -134,7 +134,7 @@ int compare(idg::proxy::Proxy &proxy1, idg::proxy::Proxy &proxy2, float tol) {
   float cell_size = image_size / grid_size;
 
   // Configure Stokes-I only mode
-  char *cstr_stokes_i_only = getenv("STOKES_I_ONLY");
+  char* cstr_stokes_i_only = getenv("STOKES_I_ONLY");
   auto stokes_i_only = cstr_stokes_i_only ? atoi(cstr_stokes_i_only) : false;
   if (stokes_i_only) {
     nr_correlations = 2;
@@ -145,30 +145,36 @@ int compare(idg::proxy::Proxy &proxy1, idg::proxy::Proxy &proxy2, float tol) {
                    image_size, grid_size, subgrid_size, kernel_size);
 
   std::clog << ">>> Initialize data structures" << std::endl;
-  idg::Array1D<float> frequencies = proxy2.allocate_array1d<float>(nr_channels);
-
+  aocommon::xt::Span<float, 1> frequencies =
+      proxy2.allocate_span<float, 1>({nr_channels});
   data.get_frequencies(frequencies, image_size);
-  idg::Array2D<idg::UVW<float>> uvw =
-      proxy2.allocate_array2d<idg::UVW<float>>(nr_baselines, nr_timesteps);
+  aocommon::xt::Span<idg::UVW<float>, 2> uvw =
+      proxy2.allocate_span<idg::UVW<float>, 2>({nr_baselines, nr_timesteps});
   data.get_uvw(uvw);
-  idg::Array4D<std::complex<float>> visibilities = idg::get_dummy_visibilities(
-      proxy2, nr_baselines, nr_timesteps, nr_channels, nr_correlations);
-  idg::Array4D<std::complex<float>> visibilities_ref =
+  aocommon::xt::Span<std::complex<float>, 4> visibilities =
+      idg::get_dummy_visibilities(proxy2, nr_baselines, nr_timesteps,
+                                  nr_channels, nr_correlations);
+  aocommon::xt::Span<std::complex<float>, 4> visibilities_ref =
       idg::get_dummy_visibilities(proxy1, nr_baselines, nr_timesteps,
                                   nr_channels, nr_correlations);
-  idg::Array1D<std::pair<unsigned int, unsigned int>> baselines =
+  aocommon::xt::Span<std::pair<unsigned int, unsigned int>, 1> baselines =
       idg::get_example_baselines(proxy2, nr_stations, nr_baselines);
-  idg::Array4D<idg::Matrix2x2<std::complex<float>>> aterms =
+  aocommon::xt::Span<idg::Matrix2x2<std::complex<float>>, 4> aterms =
       idg::get_example_aterms(proxy2, nr_timeslots, nr_stations, subgrid_size,
                               subgrid_size);
-  idg::Array1D<unsigned int> aterms_offsets =
-      idg::get_example_aterms_offsets(proxy2, nr_timeslots, nr_timesteps);
-  idg::Array2D<float> spheroidal =
-      idg::get_example_spheroidal(proxy2, subgrid_size, subgrid_size);
-  idg::Array1D<float> shift = idg::get_zero_shift();
-  auto grid = proxy2.allocate_grid(1, nr_polarizations, grid_size, grid_size);
-  auto grid_ref =
-      proxy1.allocate_grid(1, nr_polarizations, grid_size, grid_size);
+  aocommon::xt::Span<unsigned int, 1> aterm_offsets =
+      idg::get_example_aterm_offsets(proxy2, nr_timeslots, nr_timesteps);
+  aocommon::xt::Span<float, 2> taper =
+      idg::get_example_taper(proxy2, subgrid_size, subgrid_size);
+  // Set shift to some random non-zero value
+  // shift is in radians, 0.02rad is about 1deg
+  std::array<float, 2> shift{0.02f, -0.03f};
+  aocommon::xt::Span<std::complex<float>, 4> grid =
+      proxy2.allocate_span<std::complex<float>, 4>(
+          {1, nr_polarizations, grid_size, grid_size});
+  aocommon::xt::Span<std::complex<float>, 4> grid_ref =
+      proxy1.allocate_span<std::complex<float>, 4>(
+          {1, nr_polarizations, grid_size, grid_size});
   std::clog << std::endl;
 
   // Flag the first visibilities by setting UVW coordinate to infinity
@@ -204,27 +210,27 @@ int compare(idg::proxy::Proxy &proxy1, idg::proxy::Proxy &proxy2, float tol) {
   options.mode = stokes_i_only ? idg::Plan::Mode::STOKES_I_ONLY
                                : idg::Plan::Mode::FULL_POLARIZATION;
   std::unique_ptr<idg::Plan> plan1 = proxy1.make_plan(
-      kernel_size, frequencies, uvw, baselines, aterms_offsets, options);
+      kernel_size, frequencies, uvw, baselines, aterm_offsets, options);
   std::unique_ptr<idg::Plan> plan2 = proxy2.make_plan(
-      kernel_size, frequencies, uvw, baselines, aterms_offsets, options);
+      kernel_size, frequencies, uvw, baselines, aterm_offsets, options);
   std::clog << std::endl;
 
 #if TEST_GRIDDING
   // Run gridder
   std::clog << ">>> Run gridding" << std::endl;
-  grid->zero();
+  grid.fill(std::complex<float>(0, 0));
   proxy2.gridding(*plan2, frequencies, visibilities, uvw, baselines, aterms,
-                  aterms_offsets, spheroidal);
+                  aterm_offsets, taper);
   proxy2.get_final_grid();
 
   std::clog << ">>> Run reference gridding" << std::endl;
-  grid_ref->zero();
+  grid_ref.fill(std::complex<float>(0.0f, 0.0f));
   proxy1.gridding(*plan1, frequencies, visibilities, uvw, baselines, aterms,
-                  aterms_offsets, spheroidal);
+                  aterm_offsets, taper);
   proxy1.get_final_grid();
 
   float grid_error = get_accuracy(nr_polarizations * grid_size * grid_size,
-                                  grid->data(), grid_ref->data());
+                                  grid.data(), grid_ref.data());
 #endif
 
   // Use the same grid for both degridding calls
@@ -234,38 +240,39 @@ int compare(idg::proxy::Proxy &proxy1, idg::proxy::Proxy &proxy2, float tol) {
 #if TEST_DEGRIDDING
   // Run degridder
   std::clog << ">>> Run degridding" << std::endl;
-  visibilities.zero();
+  visibilities.fill(std::complex<float>(0.0f, 0.0f));
   proxy2.degridding(*plan2, frequencies, visibilities, uvw, baselines, aterms,
-                    aterms_offsets, spheroidal);
+                    aterm_offsets, taper);
 
   std::clog << ">>> Run reference degridding" << std::endl;
-  visibilities_ref.zero();
+  visibilities_ref.fill(std::complex<float>(0.0f, 0.0f));
   proxy1.degridding(*plan1, frequencies, visibilities_ref, uvw, baselines,
-                    aterms, aterms_offsets, spheroidal);
+                    aterms, aterm_offsets, taper);
 
   float degrid_error =
       get_accuracy(nr_baselines * nr_timesteps * nr_channels * nr_correlations,
-                   (std::complex<float> *)visibilities.data(),
-                   (std::complex<float> *)visibilities_ref.data());
+                   (std::complex<float>*)visibilities.data(),
+                   (std::complex<float>*)visibilities_ref.data());
 #endif
 
 #if TEST_AVERAGE_BEAM
-  idg::Array4D<std::complex<float>> average_beam(subgrid_size, subgrid_size, 4,
-                                                 4);
-  idg::Array4D<std::complex<float>> average_beam_ref(subgrid_size, subgrid_size,
-                                                     4, 4);
-  idg::Array4D<float> weights(nr_baselines, nr_timesteps, nr_channels, 4);
-  weights.init(1.0f);
-  average_beam.init(0.0f);
-  average_beam_ref.init(0.0f);
+  auto average_beam = proxy2.allocate_span<std::complex<float>, 4>(
+      {subgrid_size, subgrid_size, 4, 4});
+  auto average_beam_ref = proxy1.allocate_span<std::complex<float>, 4>(
+      {subgrid_size, subgrid_size, 4, 4});
+  auto weights = proxy1.allocate_span<float, 4>(
+      {nr_baselines, nr_timesteps, nr_channels, 4});
+  weights.fill(1);
+  average_beam.fill(std::complex<float>(0, 0));
+  average_beam_ref.fill(std::complex<float>(0, 0));
   proxy1.compute_avg_beam(nr_stations, nr_channels, uvw, baselines, aterms,
-                          aterms_offsets, weights, average_beam);
+                          aterm_offsets, weights, average_beam_ref);
   proxy2.compute_avg_beam(nr_stations, nr_channels, uvw, baselines, aterms,
-                          aterms_offsets, weights, average_beam_ref);
+                          aterm_offsets, weights, average_beam);
   float average_beam_error =
       get_accuracy(subgrid_size * subgrid_size * 4 * 4,
-                   (std::complex<float> *)average_beam.data(),
-                   (std::complex<float> *)average_beam_ref.data());
+                   (std::complex<float>*)average_beam.data(),
+                   (std::complex<float>*)average_beam_ref.data());
 #endif
 
   // Report results

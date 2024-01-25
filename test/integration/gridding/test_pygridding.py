@@ -143,7 +143,7 @@ def run_degridding(
 
     uvw[:] = uvw_block.transpose((1, 0, 2))
 
-    aterms_offsets = idg.util.get_example_aterms_offset(nr_timeslots, nr_timesteps)
+    aterm_offsets = idg.util.get_example_aterm_offsets(nr_timeslots, nr_timesteps)
     if grid_with_beam:
         t_table = casacore.tables.taql(f"SELECT UNIQUE TIME FROM {ms}")
         t_centroid = np.mean(
@@ -179,7 +179,7 @@ def run_degridding(
         uvw,
         baselines,
         aterms,
-        aterms_offsets,
+        aterm_offsets,
         taper,
     )
 
@@ -229,7 +229,7 @@ def run_gridding(
     grid_size = next_composite(int(imagesize * padding))
 
     grid = idg.util.get_example_grid(nr_correlations, grid_size)
-    aterms_offsets = idg.util.get_example_aterms_offset(nr_timeslots, nr_timesteps)
+    aterm_offsets = idg.util.get_example_aterm_offsets(nr_timeslots, nr_timesteps)
 
     if grid_with_beam:
         t_table = casacore.tables.taql(f"SELECT UNIQUE TIME FROM {ms}")
@@ -257,8 +257,8 @@ def run_gridding(
         )
 
     # Initialize taper
-    taper = idg.util.get_example_spheroidal(subgrid_size)
-    taper_grid = idg.util.get_example_spheroidal(grid_size)
+    taper = idg.util.get_example_taper(subgrid_size)
+    taper_grid = idg.util.get_example_taper(grid_size)
 
     shift = np.zeros(2, np.float32)
     proxy.set_grid(grid)
@@ -314,7 +314,7 @@ def run_gridding(
         uvw,
         baselines,
         aterms,
-        aterms_offsets,
+        aterm_offsets,
         taper,
     )
 

@@ -10,9 +10,8 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules")
 # options
 option(BUILD_LIB_CPU "Build CPU libraries" ON)
 option(BUILD_LIB_CUDA "Build CUDA libraries" OFF)
-#option (BUILD_LIB_OPENCL "Build OpenCL libraries" OFF)
 option(BUILD_WITH_MKL "Build with MKL (if available)" OFF)
-option(BUILD_WITH_POWERSENSOR "Build with PowerSensor" OFF)
+option(BUILD_WITH_PMT "Build with Power Measurement Toolkit (PMT)" OFF)
 option(PERFORMANCE_REPORT "Report performance metrics" OFF)
 option(COMPILE_VERBOSE "Report compiler flags used during runtime compilation"
        OFF)
@@ -52,21 +51,6 @@ if(STRICT_WARNINGS
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Werror")
 endif()
 
-# make sure C++11 is used (in newer CMake use CXX_STANDARD)
-include(CheckCXXCompilerFlag)
-check_cxx_compiler_flag("-std=c++11" COMPILER_SUPPORTS_CXX11)
-check_cxx_compiler_flag("-std=c++0x" COMPILER_SUPPORTS_CXX0X)
-if(COMPILER_SUPPORTS_CXX11)
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
-elseif(COMPILER_SUPPORTS_CXX0X)
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++0x")
-else()
-  message(
-    STATUS
-      "The compiler ${CMAKE_CXX_COMPILER} has no C++11 support. Please use a different C++ compiler."
-  )
-endif()
-
 # make sure openmp is used if available
 if("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang" AND ${CMAKE_CXX_COMPILER_VERSION}
                                                    VERSION_LESS "3.8.0")
@@ -98,15 +82,9 @@ if(${ARCHITECTURE} STREQUAL "ppc64le")
 endif()
 
 # resolve dependencies
-if(BUILD_WITH_POWERSENSOR)
-  find_package(PowerSensor REQUIRED)
-endif()
-if(${POWERSENSOR_FOUND})
-  set(HAVE_POWERSENSOR TRUE)
-  include_directories(${POWERSENSOR_INCLUDE_DIR})
-else()
-  unset(POWERSENSOR_LIBRARY CACHE)
-  unset(POWERSENSOR_INCLUDE_DIR CACHE)
+if(BUILD_WITH_PMT)
+  find_package(PMT REQUIRED)
+  set(HAVE_PMT TRUE)
 endif()
 
 # FFT library
@@ -179,9 +157,6 @@ if(BUILD_LIB_CUDA)
 endif()
 if(BUILD_LIB_CPU AND BUILD_LIB_CUDA)
   set(TARGETS_TO_EXPORT ${TARGETS_TO_EXPORT} idg-hybrid-cuda)
-endif()
-if(BUILD_LIB_OPENCL)
-  set(TARGETS_TO_EXPORT ${TARGETS_TO_EXPORT} idg-opencl)
 endif()
 export(TARGETS ${TARGETS_TO_EXPORT}
        FILE ${PROJECT_BINARY_DIR}/CMakeFiles/idg-targets.cmake)

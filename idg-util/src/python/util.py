@@ -18,31 +18,6 @@ from idg.idgtypes import *
 lib = ctypes.cdll.LoadLibrary('libidg-util.so')
 
 
-def resize_spheroidal(spheroidal, size, dtype=np.float32):
-    """
-    Resize a spheroidal
-
-    :param spheroidal: Input spheroidal
-    :type spheroidal: np.arrayd(type=float) (two dimensions)
-    :param size: New size along one axis
-    :type size: int
-    :param dtype: new dtype, defaults to np.float32
-    :type dtype: np.dtype, optional
-    :return: New spheroidal
-    :rtype: np.array(dtype=float) (two dimensions)
-    """
-    if spheroidal.shape[1] != spheroidal.shape[0]:
-        raise ValueError("Input spheroidal size should be square")
-    subgrid_size = spheroidal.shape[0]
-    tmp = spheroidal.astype(np.float32)
-    result = np.zeros(shape=(size, size), dtype=np.float32)
-    lib.utils_resize_spheroidal(tmp.ctypes.data_as(ctypes.c_void_p),
-                                ctypes.c_int(subgrid_size),
-                                result.ctypes.data_as(ctypes.c_void_p),
-                                ctypes.c_int(size))
-    return result.astype(dtype)
-
-
 def nr_baselines_to_nr_stations(nr_baselines):
     """
     Convert number of baselines to number of stations, assuming that all station
@@ -105,14 +80,15 @@ def add_pt_src(x, y, amplitude, nr_baselines, nr_time, nr_channels,
                          ctypes.c_int(nr_time), ctypes.c_int(nr_channels),
                          ctypes.c_int(nr_correlations),
                          ctypes.c_float(image_size), ctypes.c_int(grid_size),
-                         uvw.ctypes.data_as(ctypes.c_void_p),
-                         frequencies.ctypes.data_as(ctypes.c_void_p),
-                         vis.ctypes.data_as(ctypes.c_void_p))
+                         uvw.ctypes.data,
+                         frequencies.ctypes.data,
+                         vis.ctypes.data)
 
 
-def func_spheroidal(nu):
+def evaluate_spheroidal(nu):
     """Function to compute spheroidal
-        Based on reference code by Bas"""
+        Based on libreSpheroidal function in CASA
+        https://github.com/radio-astro/casa/blob/4ebd5b1508a5d31b74e7b5f6b89313368d30b9ef/code/synthesis/TransformMachines/Utils.cc#L776"""
     P = np.array(
         [[8.203343e-2, -3.644705e-1, 6.278660e-1, -5.335581e-1, 2.312756e-1],
          [4.028559e-3, -3.697768e-2, 1.021332e-1, -1.201436e-1, 6.412774e-2]])
@@ -165,25 +141,25 @@ def make_gaussian(size, fwhm=3, center=None):
     return np.exp(-4 * np.log(2) * ((x - x0)**2 + (y - y0)**2) / fwhm**2)
 
 
-def init_example_spheroidal_subgrid(subgrid_size):
-    """Construct spheroidal for subgrid"""
+def init_example_taper_subgrid(subgrid_size):
+    """Construct taper for subgrid"""
     # Spheroidal from Bas
     x = np.array(np.abs(
         np.linspace(-1, 1, num=subgrid_size, endpoint=False)),
                     dtype=np.float32)
-    x = np.array([func_spheroidal(e) for e in x], dtype=np.float32)
-    spheroidal = x[np.newaxis, :] * x[:, np.newaxis]
-    return spheroidal
+    x = np.array([evaluate_spheroidal(e) for e in x], dtype=np.float32)
+    taper = x[np.newaxis, :] * x[:, np.newaxis]
+    return taper
     # Ones
     #return np.ones((subgrid_size, subgrid_size), dtype = np.float32)
     # Gaussian
     #return make_gaussian(subgrid_size, int(subgrid_size * 0.3))
 
 
-def init_example_spheroidal_grid(subgrid_size, grid_size):
-    """Construct spheroidal for grid"""
-    spheroidal = init_example_spheroidal_subgrid(subgrid_size)
-    s = np.fft.fft2(spheroidal)
+def init_example_taper_grid(subgrid_size, grid_size):
+    """Construct taper for grid"""
+    taper = init_example_taper_subgrid(subgrid_size)
+    s = np.fft.fft2(taper)
     s = np.fft.fftshift(s)
     s1 = np.zeros((grid_size, grid_size), dtype=np.complex64)
     support_size1 = int((grid_size - subgrid_size) / 2)
@@ -540,16 +516,16 @@ def plot_aterms(aterms):
     print("TO BE IMPLEMENTED")
 
 
-def plot_spheroidal(spheroidal, interpolation_method='none'):
-    """Plot spheroidal
+def plot_taper(taper, interpolation_method='none'):
+    """Plot taper
     Input:
-    spheroidal - np.ndarray(shape=(subgrid_size, subgrid_size),
+    taper - np.ndarray(shape=(subgrid_size, subgrid_size),
                                dtype = idg.tapertype)
     interpolation_method - 'none', 'nearest', 'bilinear', 'bicubic',
                            'spline16', ... (see matplotlib imshow)
     """
-    plt.figure(get_figure_name("spheroidal"))
-    plt.imshow(spheroidal, interpolation=interpolation_method)
+    plt.figure(get_figure_name("taper"))
+    plt.imshow(taper, interpolation=interpolation_method)
     plt.colorbar()
 
 
@@ -735,8 +711,8 @@ def plot_metadata(metadata, uvw, frequencies, grid_size, subgrid_size,
     plt.imshow(grid, interpolation='None')
 
     # Show u,v coordinates (from uvw)
-    u = uvw['u'].flatten()
-    v = uvw['v'].flatten()
+    u = uvw[:,:,0].flatten()
+    v = uvw[:,:,1].flatten()
     u_pixels = []
     v_pixels = []
     for frequency in frequencies:
@@ -746,7 +722,7 @@ def plot_metadata(metadata, uvw, frequencies, grid_size, subgrid_size,
     u_pixels = np.asarray(u_pixels).flatten() + (grid_size / 2)
     v_pixels = np.asarray(v_pixels).flatten() + (grid_size / 2)
 
-    #plt.plot(u_pixels, v_pixels, 'r.', markersize=2, alpha=0.9)
+    plt.plot(u_pixels, v_pixels, 'r.', markersize=2, alpha=0.9)
 
     # Make mouseover show value of grid
     def format_coord(x, y):
@@ -765,7 +741,6 @@ def plot_metadata(metadata, uvw, frequencies, grid_size, subgrid_size,
     # Set plot options
     plt.grid(True)
     plt.colorbar()
-    plt.axes().set_aspect('equal')
     plt.xlim([0, grid_size])
     plt.ylim([grid_size, 0])
 
@@ -784,20 +759,20 @@ def init_identity_aterms(aterms):
     lib.utils_init_identity_aterms.argtypes = [
         ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int
     ]
-    lib.utils_init_identity_aterms(aterms.ctypes.data_as(ctypes.c_void_p),
+    lib.utils_init_identity_aterms(aterms.ctypes.data,
                                    ctypes.c_int(nr_timeslots),
                                    ctypes.c_int(nr_stations),
                                    ctypes.c_int(subgrid_size),
                                    ctypes.c_int(nr_correlations))
 
 
-def init_identity_spheroidal(spheroidal):
-    subgrid_size = spheroidal.shape[0]
-    lib.utils_init_identity_spheroidal.argtypes = [
+def init_identity_taper(taper):
+    subgrid_size = taper.shape[0]
+    lib.utils_init_identity_taper.argtypes = [
         ctypes.c_void_p, ctypes.c_int
     ]
-    lib.utils_init_identity_spheroidal(
-        spheroidal.ctypes.data_as(ctypes.c_void_p), ctypes.c_int(subgrid_size))
+    lib.utils_init_identity_taper(
+        taper.ctypes.data, ctypes.c_int(subgrid_size))
 
 
 def get_identity_aterms(nr_timeslots,
@@ -825,14 +800,14 @@ def get_zero_grid(nr_correlations, grid_size, dtype=gridtype, info=False):
     return grid
 
 
-def get_identity_spheroidal(subgrid_size, dtype=tapertype, info=False):
-    spheroidal = np.zeros(shape=(subgrid_size, subgrid_size),
+def get_identity_taper(subgrid_size, dtype=tapertype, info=False):
+    taper = np.zeros(shape=(subgrid_size, subgrid_size),
                              dtype=tapertype)
-    init_identity_spheroidal(spheroidal)
+    init_identity_taper(taper)
     if info == True:
         print("grid: np.ndarray(shape = (subgrid_size, subgrid_size), " + \
                                    "dtype = " + str(dtype) + ")")
-    return spheroidal.astype(dtype=dtype)
+    return taper.astype(dtype=dtype)
 
 
 def get_zero_visibilities(nr_baselines,
@@ -859,7 +834,7 @@ def init_example_frequencies(frequencies):
         ctypes.c_void_p, ctypes.c_int
     ]
     lib.utils_init_example_frequencies(
-        frequencies.ctypes.data_as(ctypes.c_void_p), ctypes.c_int(nr_channels))
+        frequencies.ctypes.data, ctypes.c_int(nr_channels))
 
 
 def init_dummy_visibilities(visibilities):
@@ -872,7 +847,7 @@ def init_dummy_visibilities(visibilities):
         ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int
     ]
     lib.utils_init_dummy_visibilities(
-        visibilities.ctypes.data_as(ctypes.c_void_p),
+        visibilities.ctypes.data,
         ctypes.c_int(nr_baselines), ctypes.c_int(nr_time),
         ctypes.c_int(nr_channels), ctypes.c_int(nr_correlations))
 
@@ -886,42 +861,42 @@ def init_identity_aterms(aterms):
     lib.utils_init_identity_aterms.argtypes = [
         ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int
     ]
-    lib.utils_init_identity_aterms(aterms.ctypes.data_as(ctypes.c_void_p),
+    lib.utils_init_identity_aterms(aterms.ctypes.data,
                                    ctypes.c_int(nr_timeslots),
                                    ctypes.c_int(nr_stations),
                                    ctypes.c_int(subgrid_size),
                                    ctypes.c_int(nr_correlations))
 
 
-def init_example_spheroidal(spheroidal):
-    """Initialize spheroidal for test case defined in utility/initialize"""
-    subgrid_size = spheroidal.shape[0]
-    lib.utils_init_example_spheroidal.argtypes = [
+def init_example_taper(taper):
+    """Initialize taper for test case defined in utility/initialize"""
+    subgrid_size = taper.shape[0]
+    lib.utils_init_example_taper.argtypes = [
         ctypes.c_void_p, ctypes.c_int
     ]
-    lib.utils_init_example_spheroidal(
-        spheroidal.ctypes.data_as(ctypes.c_void_p), ctypes.c_int(subgrid_size))
+    lib.utils_init_example_taper(
+        taper.ctypes.data, ctypes.c_int(subgrid_size))
 
 
 def init_example_aterms(aterms, nr_timeslots, nr_stations, height, width):
     """Initialize aterms"""
-    lib.utils_init_example_aterms_offset.argtypes = [
+    lib.utils_init_example_aterms.argtypes = [
         ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int
     ]
-    lib.utils_init_example_aterms(aterms.ctypes.data_as(ctypes.c_void_p),
+    lib.utils_init_example_aterms(aterms.ctypes.data,
                                   ctypes.c_int(nr_timeslots),
                                   ctypes.c_int(nr_stations),
                                   ctypes.c_int(height), ctypes.c_int(width))
 
 
-def init_example_aterms_offset(aterms_offset, nr_time):
+def init_example_aterm_offsets(aterms_offset, nr_time):
     """Initialize aterms offset"""
     nr_timeslots = aterms_offset.shape[0] - 1
-    lib.utils_init_example_aterms_offset.argtypes = [
+    lib.utils_init_example_aterm_offsets.argtypes = [
         ctypes.c_void_p, ctypes.c_int, ctypes.c_int
     ]
-    lib.utils_init_example_aterms_offset(
-        aterms_offset.ctypes.data_as(ctypes.c_void_p),
+    lib.utils_init_example_aterm_offsets(
+        aterms_offset.ctypes.data,
         ctypes.c_int(nr_timeslots), ctypes.c_int(nr_time))
 
 
@@ -934,7 +909,7 @@ def init_example_baselines(baselines, nr_stations):
     lib.utils_init_example_baselines.argtypes = [ctypes.c_void_p,
                                                  ctypes.c_int,
                                                  ctypes.c_int]
-    lib.utils_init_example_baselines(baselines.ctypes.data_as(ctypes.c_void_p),
+    lib.utils_init_example_baselines(baselines.ctypes.data,
                                      ctypes.c_int(nr_stations),
                                      ctypes.c_int(nr_baselines))
 
@@ -953,7 +928,7 @@ def get_example_baselines(nr_stations, nr_baselines,
                           dtype=np.int32, info=False):
     """Initialize and return example baselines array"""
     baselines = np.zeros((nr_baselines, 2),
-                            dtype = np.int32)
+                          dtype = np.int32)
     init_example_baselines(baselines, nr_stations)
     if info==True:
         print("baselines: np.ndarray(shape = (nr_channels), " + \
@@ -987,25 +962,25 @@ def get_example_aterms(nr_timeslots,
     return aterms.astype(dtype=dtype)
 
 
-def get_example_aterms_offset(nr_timeslots,
+def get_example_aterm_offsets(nr_timeslots,
                               nr_time,
                               dtype=atermoffsettype,
                               info=False):
     aterms_offset = np.zeros((nr_timeslots + 1), dtype=atermoffsettype)
-    init_example_aterms_offset(aterms_offset, nr_time)
+    init_example_aterm_offsets(aterms_offset, nr_time)
     if info == True:
         print("aterms_offset: np.ndarray(shape = (nr_timeslots + 1), " + \
               "dtype = " + str(dtype) + ")")
     return aterms_offset.astype(dtype=dtype)
 
 
-def get_example_spheroidal(subgrid_size, dtype=tapertype, info=False):
-    spheroidal = np.ones((subgrid_size, subgrid_size), dtype=tapertype)
-    init_example_spheroidal(spheroidal)
+def get_example_taper(subgrid_size, dtype=tapertype, info=False):
+    taper = np.ones((subgrid_size, subgrid_size), dtype=tapertype)
+    init_example_taper(taper)
     if info == True:
-        print("spheroidal: np.ndarray(shape = (subgrid_size, subgrid_size), " + \
+        print("taper: np.ndarray(shape = (subgrid_size, subgrid_size), " + \
               "dtype = " + str(dtype) + ")")
-    return spheroidal.astype(dtype=dtype)
+    return taper.astype(dtype=dtype)
 
 
 def get_example_visibilities(nr_baselines,
@@ -1046,7 +1021,7 @@ def get_example_visibilities(nr_baselines,
                    frequencies, visibilities)
 
     if info == True:
-        print("spheroidal: np.ndarray(shape = (nr_baselines, nr_time, " + \
+        print("taper: np.ndarray(shape = (nr_baselines, nr_time, " + \
               "nr_channels, nr_correlations), " + \
               "dtype = " + str(dtype) + ")")
 

@@ -15,6 +15,7 @@
 #include <csignal>
 
 #include <omp.h>
+#include <xtensor/xcomplex.hpp>
 
 // #if defined(HAVE_MKL)
 //     #include <mkl_lapacke.h>
@@ -70,21 +71,18 @@ int nextcomposite(int n) {
 }
 
 BufferSetImpl::BufferSetImpl(Type architecture)
-    : m_default_aterm_correction(0, 0, 0, 0),
-      m_avg_aterm_correction(0, 0, 0, 0),
+    : m_taper(aocommon::xt::CreateSpan<float, 2>(nullptr, {0, 0})),
       m_stokes_I_only(false),
       m_nr_correlations(4),
       m_nr_polarizations(4),
       m_proxy(create_proxy(architecture)),
-      m_shift(2),
+      m_shift({0, 0}),
       m_get_image_watch(Stopwatch::create()),
       m_set_image_watch(Stopwatch::create()),
       m_avg_beam_watch(Stopwatch::create()),
       m_plan_watch(Stopwatch::create()),
       m_gridding_watch(Stopwatch::create()),
-      m_degridding_watch(Stopwatch::create()) {
-  m_shift.zero();
-}
+      m_degridding_watch(Stopwatch::create()) {}
 
 BufferSetImpl::~BufferSetImpl() {
   // Free all objects allocated via the proxy before destroying the proxy.
@@ -93,7 +91,6 @@ BufferSetImpl::~BufferSetImpl() {
   m_gridderbuffers.clear();
   m_degridderbuffers.clear();
   m_bulkdegridders.clear();
-  m_spheroidal.free();
   m_proxy.reset();
   report_runtime();
 }
@@ -150,26 +147,20 @@ std::unique_ptr<proxy::Proxy> BufferSetImpl::create_proxy(Type architecture) {
     );
 #endif
   }
-  if (architecture == Type::OPENCL_GENERIC) {
-#if defined(BUILD_LIB_OPENCL)
-    proxy.reset(new proxy::opencl::Generic());
-#else
-    throw std::runtime_error(
-        "Can not create OPENCL_GENERIC proxy. idg-lib was built with "
-        "BUILD_LIB_OPENCL=OFF");
-#endif
-  }
 
   if (!proxy) throw std::invalid_argument("Unknown architecture type.");
 
   return proxy;
 }
 
-std::shared_ptr<idg::Grid> BufferSetImpl::allocate_grid() {
+aocommon::xt::Span<std::complex<float>, 4> BufferSetImpl::allocate_grid() {
   m_proxy->free_grid();
-  std::shared_ptr<idg::Grid> grid = m_proxy->allocate_grid(
-      m_nr_w_layers, m_nr_polarizations, m_padded_size, m_padded_size);
-  grid->zero();
+  aocommon::xt::Span<std::complex<float>, 4> grid =
+      m_proxy->allocate_span<std::complex<float>, 4>(
+          {static_cast<size_t>(m_nr_w_layers),
+           static_cast<size_t>(m_nr_polarizations), m_padded_size,
+           m_padded_size});
+  grid.fill(std::complex<float>(0, 0));
   m_proxy->set_grid(grid);
   return grid;
 }
@@ -267,8 +258,8 @@ void BufferSetImpl::init(size_t size, float cell_size, float max_w,
   std::cout << "nr_w_layers: " << m_nr_w_layers << std::endl;
 #endif
 
-  m_shift(0) = shiftl;
-  m_shift(1) = shiftm;
+  m_shift[0] = shiftl;
+  m_shift[1] = shiftm;
 
   m_kernel_size = taper_kernel_size + w_kernel_size + a_term_kernel_size;
 
@@ -279,17 +270,6 @@ void BufferSetImpl::init(size_t size, float cell_size, float max_w,
   m_subgridsize =
       int(std::ceil((m_kernel_size + uv_span_time + uv_span_frequency) / 8.0)) *
       8;
-
-  m_default_aterm_correction =
-      Array4D<std::complex<float>>(m_subgridsize, m_subgridsize, 4, 4);
-  m_default_aterm_correction.init(0.0);
-  for (size_t i = 0; i < m_subgridsize; i++) {
-    for (size_t j = 0; j < m_subgridsize; j++) {
-      for (size_t k = 0; k < 4; k++) {
-        m_default_aterm_correction(i, j, k, k) = 1.0;
-      }
-    }
-  }
 
   allocate_grid();
   m_proxy->init_cache(m_subgridsize, m_cell_size, m_w_step, m_shift);
@@ -316,11 +296,11 @@ void BufferSetImpl::init(size_t size, float cell_size, float max_w,
     m_inv_taper[i] = 1.0 / y;
   }
 
-  // Generate spheroidal using m_taper_subgrid.
-  m_spheroidal = m_proxy->allocate_array2d<float>(m_subgridsize, m_subgridsize);
+  // Generate m_taper using m_taper_subgrid.
+  m_taper = m_proxy->allocate_span<float, 2>({m_subgridsize, m_subgridsize});
   for (size_t y = 0; y < m_subgridsize; y++) {
     for (size_t x = 0; x < m_subgridsize; x++) {
-      m_spheroidal(y, x) = m_taper_subgrid[y] * m_taper_subgrid[x];
+      m_taper(y, x) = m_taper_subgrid[y] * m_taper_subgrid[x];
     }
   }
 }
@@ -398,9 +378,9 @@ void BufferSetImpl::set_image(const double* image, bool do_scale) {
   std::cout << std::setprecision(3);
 #endif
 
-  Grid& grid = *allocate_grid();
+  aocommon::xt::Span<std::complex<float>, 4> grid = allocate_grid();
 
-  const int nr_w_layers = grid.get_w_dim();
+  const size_t nr_w_layers = grid.shape(0);
   const size_t y0 = (m_padded_size - m_size) / 2;
   const size_t x0 = (m_padded_size - m_size) / 2;
 
@@ -409,7 +389,7 @@ void BufferSetImpl::set_image(const double* image, bool do_scale) {
   std::cout << "set grid from image" << std::endl;
 #endif
   double runtime_stacking = -omp_get_wtime();
-  grid.zero();
+  grid.fill(std::complex<float>(0, 0));
 #pragma omp parallel
   {
     typedef float arr_float_1D_t[m_size];
@@ -425,20 +405,21 @@ void BufferSetImpl::set_image(const double* image, bool do_scale) {
         *reinterpret_cast<arr_float_2D_t*>(aligned_alloc(64, size_2D));
     arr_float_2D_t& w_row_imag __attribute__((aligned(64))) =
         *reinterpret_cast<arr_float_2D_t*>(aligned_alloc(64, size_2D));
-    arr_float_1D_t& inv_tapers __attribute__((aligned(64))) =
+    arr_float_1D_t& inverse_taper __attribute__((aligned(64))) =
         *reinterpret_cast<arr_float_1D_t*>(aligned_alloc(64, size_1D));
     arr_float_1D_t& phasor_real __attribute__((aligned(64))) =
         *reinterpret_cast<arr_float_1D_t*>(aligned_alloc(64, size_1D));
     arr_float_1D_t& phasor_imag __attribute__((aligned(64))) =
         *reinterpret_cast<arr_float_1D_t*>(aligned_alloc(64, size_1D));
 
+    auto image_array = aocommon::xt::CreateSpan(
+        image, std::array<size_t, 3>{static_cast<size_t>(m_nr_polarizations),
+                                     m_size, m_size});
+
 #pragma omp for
     for (int y = 0; y < m_size; y++) {
       memset(w0_row_real, 0, m_nr_polarizations * m_size * sizeof(float));
       memset(w0_row_imag, 0, m_nr_polarizations * m_size * sizeof(float));
-
-      const Array3D<double> image_array(const_cast<double*>(image),
-                                        m_nr_polarizations, m_size, m_size);
 
       // Copy row of image and convert stokes to polarizations
       if (m_stokes_I_only) {
@@ -491,9 +472,9 @@ void BufferSetImpl::set_image(const double* image, bool do_scale) {
         }  // end for x
       }
 
-      // Compute inverse spheroidal
+      // Compute inverse taper
       for (int x = 0; x < m_size; x++) {
-        inv_tapers[x] = m_inv_taper[y] * m_inv_taper[x];
+        inverse_taper[x] = m_inv_taper[y] * m_inv_taper[x];
       }  // end for x
 
       // Copy to other w planes and multiply by w term
@@ -503,8 +484,8 @@ void BufferSetImpl::set_image(const double* image, bool do_scale) {
         if (!m_apply_wstack_correction) {
           for (int pol = 0; pol < m_nr_polarizations; pol++) {
             for (int x = 0; x < m_size; x++) {
-              w_row_real[pol][x] = w0_row_real[pol][x] * inv_tapers[x];
-              w_row_imag[pol][x] = w0_row_imag[pol][x] * inv_tapers[x];
+              w_row_real[pol][x] = w0_row_real[pol][x] * inverse_taper[x];
+              w_row_imag[pol][x] = w0_row_imag[pol][x] * inverse_taper[x];
             }  // end for x
           }    // end for pol
         } else {
@@ -523,8 +504,8 @@ void BufferSetImpl::set_image(const double* image, bool do_scale) {
           // Compute current row of w-plane
           for (int pol = 0; pol < m_nr_polarizations; pol++) {
             for (int x = 0; x < m_size; x++) {
-              float value_real = w0_row_real[pol][x] * inv_tapers[x];
-              float value_imag = w0_row_imag[pol][x] * inv_tapers[x];
+              float value_real = w0_row_real[pol][x] * inverse_taper[x];
+              float value_imag = w0_row_imag[pol][x] * inverse_taper[x];
               float phasor_real_ = phasor_real[x];
               float phasor_imag_ = phasor_imag[x];
               w_row_real[pol][x] = value_real * phasor_real_;
@@ -549,7 +530,7 @@ void BufferSetImpl::set_image(const double* image, bool do_scale) {
     free(w0_row_imag);
     free(w_row_real);
     free(w_row_imag);
-    free(inv_tapers);
+    free(inverse_taper);
     free(phasor_real);
     free(phasor_imag);
   }
@@ -565,7 +546,7 @@ void BufferSetImpl::set_image(const double* image, bool do_scale) {
 #endif
   int batch = nr_w_layers * m_nr_polarizations;
   double runtime_fft = -omp_get_wtime();
-  fft2f(batch, m_padded_size, m_padded_size, grid.data(0, 0, 0, 0));
+  fft2f(batch, m_padded_size, m_padded_size, grid.data());
   runtime_fft += omp_get_wtime();
 #if ENABLE_VERBOSE_TIMING
   std::cout << ", runtime: " << runtime_fft << std::endl;
@@ -580,49 +561,36 @@ void BufferSetImpl::set_image(const double* image, bool do_scale) {
   m_set_image_watch->Pause();
 }
 
-void BufferSetImpl::write_grid(idg::Grid& grid) {
-  size_t nr_w_layers = grid.get_w_dim();
-  size_t nr_polarizations = grid.get_z_dim();
-  size_t grid_size = grid.get_y_dim();
-  assert(grid_size == grid.get_x_dim());
-
-  std::vector<float> grid_real(nr_w_layers * nr_polarizations * grid_size *
-                               grid_size * sizeof(float));
-  std::vector<float> grid_imag(nr_w_layers * nr_polarizations * grid_size *
-                               grid_size * sizeof(float));
-  for (int w = 0; w < nr_w_layers; w++) {
-#pragma omp parallel for
-    for (int y = 0; y < grid_size; y++) {
-      for (int x = 0; x < grid_size; x++) {
-        for (int pol = 0; pol < nr_polarizations; pol++) {
-          size_t idx = w * nr_polarizations * grid_size * grid_size +
-                       pol * grid_size * grid_size + y * grid_size + x;
-          grid_real[idx] = grid(w, pol, y, x).real();
-          grid_imag[idx] = grid(w, pol, y, x).imag();
-        }
-      }
-    }
-  }
+void BufferSetImpl::write_grid(
+    const aocommon::xt::Span<std::complex<float>, 4>& grid) {
+  const size_t nr_w_layers = grid.shape(0);
+  const size_t nr_polarizations = grid.shape(1);
+  const size_t grid_size = grid.shape(2);
+  assert(grid.shape(3) == grid_size);
   std::cout << "writing grid to grid_real.npy and grid_imag.npy" << std::endl;
-  const long unsigned leshape[] = {(long unsigned int)nr_w_layers,
+  const long unsigned leshape[] = {static_cast<long unsigned int>(nr_w_layers),
                                    nr_polarizations, grid_size, grid_size};
-  npy::SaveArrayAsNumpy("grid_real.npy", false, 4, leshape, grid_real);
-  npy::SaveArrayAsNumpy("grid_imag.npy", false, 4, leshape, grid_imag);
+  auto grid_real = xt::real(grid);
+  auto grid_imag = xt::imag(grid);
+  npy::SaveArrayAsNumpy("grid_real.npy", false, 4, leshape,
+                        std::vector<float>(grid_real.begin(), grid_real.end()));
+  npy::SaveArrayAsNumpy("grid_imag.npy", false, 4, leshape,
+                        std::vector<float>(grid_imag.begin(), grid_imag.end()));
 }
 
 void BufferSetImpl::get_image(double* image) {
   m_get_image_watch->Start();
 
   // Flush all pending operations on the grid
-  const Grid& grid = *m_proxy->get_final_grid();
-  int nr_polarizations = grid.get_z_dim();
+  aocommon::xt::Span<std::complex<float>, 4>& grid = m_proxy->get_final_grid();
+  const size_t nr_w_layers = grid.shape(0);
+  const size_t nr_polarizations = grid.shape(1);
 
   double runtime = -omp_get_wtime();
 #if ENABLE_VERBOSE_TIMING
   std::cout << std::setprecision(3);
 #endif
 
-  const int nr_w_layers = grid.get_w_dim();
   const size_t y0 = (m_padded_size - m_size) / 2;
   const size_t x0 = (m_padded_size - m_size) / 2;
 
@@ -632,7 +600,7 @@ void BufferSetImpl::get_image(double* image) {
 #endif
   int batch = nr_w_layers * nr_polarizations;
   double runtime_fft = -omp_get_wtime();
-  idg::ifft2f(batch, m_padded_size, m_padded_size, grid.data(0, 0, 0, 0));
+  idg::ifft2f(batch, m_padded_size, m_padded_size, grid.data());
   runtime_fft += omp_get_wtime();
 #if ENABLE_VERBOSE_TIMING
   std::cout << ", runtime: " << runtime_fft << std::endl;
@@ -656,21 +624,22 @@ void BufferSetImpl::get_image(double* image) {
         *reinterpret_cast<arr_float_2D_t*>(aligned_alloc(64, size_2D));
     arr_float_2D_t& w_row_imag __attribute__((aligned(64))) =
         *reinterpret_cast<arr_float_2D_t*>(aligned_alloc(64, size_2D));
-    arr_float_1D_t& inv_tapers __attribute__((aligned(64))) =
+    arr_float_1D_t& inverse_taper __attribute__((aligned(64))) =
         *reinterpret_cast<arr_float_1D_t*>(aligned_alloc(64, size_1D));
     arr_float_1D_t& phasor_real __attribute__((aligned(64))) =
         *reinterpret_cast<arr_float_1D_t*>(aligned_alloc(64, size_1D));
     arr_float_1D_t& phasor_imag __attribute__((aligned(64))) =
         *reinterpret_cast<arr_float_1D_t*>(aligned_alloc(64, size_1D));
 
+    auto image_array = aocommon::xt::CreateSpan(
+        image, std::array<size_t, 3>{static_cast<size_t>(m_nr_polarizations),
+                                     m_size, m_size});
+
 #pragma omp for
     for (int y = 0; y < m_size; y++) {
-      Array3D<double> image_array((double*)image, m_nr_polarizations, m_size,
-                                  m_size);
-
-      // Compute inverse spheroidal
+      // Compute inverse taper
       for (int x = 0; x < m_size; x++) {
-        inv_tapers[x] = m_inv_taper[y] * m_inv_taper[x];
+        inverse_taper[x] = m_inv_taper[y] * m_inv_taper[x];
       }
 
       if (!m_apply_wstack_correction) {
@@ -678,8 +647,8 @@ void BufferSetImpl::get_image(double* image) {
         for (int pol = 0; pol < nr_polarizations; pol++) {
           for (int x = 0; x < m_size; x++) {
             auto value = grid(0, pol, y + y0, x + x0);
-            w0_row_real[pol][x] = value.real() * inv_tapers[x];
-            w0_row_imag[pol][x] = value.imag() * inv_tapers[x];
+            w0_row_real[pol][x] = value.real() * inverse_taper[x];
+            w0_row_imag[pol][x] = value.imag() * inverse_taper[x];
           }  // end for x
         }    // end for pol
       } else {
@@ -712,8 +681,8 @@ void BufferSetImpl::get_image(double* image) {
           // Compute current row of w-plane
           for (int pol = 0; pol < nr_polarizations; pol++) {
             for (int x = 0; x < m_size; x++) {
-              float value_real = w_row_real[pol][x] * inv_tapers[x];
-              float value_imag = w_row_imag[pol][x] * inv_tapers[x];
+              float value_real = w_row_real[pol][x] * inverse_taper[x];
+              float value_imag = w_row_imag[pol][x] * inverse_taper[x];
               float phasor_real_ = phasor_real[x];
               float phasor_imag_ = phasor_imag[x];
               w_row_real[pol][x] = value_real * phasor_real_;
@@ -765,7 +734,7 @@ void BufferSetImpl::get_image(double* image) {
     free(w0_row_imag);
     free(w_row_real);
     free(w_row_imag);
-    free(inv_tapers);
+    free(inverse_taper);
     free(phasor_real);
     free(phasor_imag);
   }
@@ -955,9 +924,10 @@ void BufferSetImpl::finalize_compute_avg_beam() {
   }
 #endif
 
-  m_avg_aterm_correction = Array4D<std::complex<float>>(
-      m_matrix_inverse_beam->data(), m_subgridsize, m_subgridsize, 4, 4);
-  m_proxy->set_avg_aterm_correction(m_avg_aterm_correction);
+  auto matrix_inverse_beam_span =
+      aocommon::xt::CreateSpan<std::complex<float>, 4>(
+          m_matrix_inverse_beam->data(), {m_subgridsize, m_subgridsize, 4, 4});
+  m_proxy->set_avg_aterm_correction(matrix_inverse_beam_span);
 
 #ifndef NDEBUG
   {
@@ -973,14 +943,14 @@ void BufferSetImpl::finalize_compute_avg_beam() {
 void BufferSetImpl::set_matrix_inverse_beam(
     std::shared_ptr<std::vector<std::complex<float>>> matrix_inverse_beam) {
   m_matrix_inverse_beam = matrix_inverse_beam;
-  m_avg_aterm_correction = Array4D<std::complex<float>>(
-      m_matrix_inverse_beam->data(), m_subgridsize, m_subgridsize, 4, 4);
-  m_proxy->set_avg_aterm_correction(m_avg_aterm_correction);
+  auto matrix_inverse_beam_span =
+      aocommon::xt::CreateSpan<std::complex<float>, 4>(
+          m_matrix_inverse_beam->data(), {m_subgridsize, m_subgridsize, 4, 4});
+  m_proxy->set_avg_aterm_correction(matrix_inverse_beam_span);
 }
 
 void BufferSetImpl::unset_matrix_inverse_beam() {
   m_matrix_inverse_beam.reset();
-  m_avg_aterm_correction = Array4D<std::complex<float>>(0, 0, 0, 0);
   m_proxy->unset_avg_aterm_correction();
 }
 

@@ -20,7 +20,7 @@ class Plan(object):
         frequencies,
         uvw,
         baselines,
-        aterms_offsets):
+        aterm_offsets):
 
         # extract dimensions
         nr_channels                  = frequencies.shape[0]
@@ -29,7 +29,7 @@ class Plan(object):
         uvw_nr_coordinates           = 3
         baselines_nr_baselines       = baselines.shape[0]
         baselines_two                = 2
-        aterms_offsets_nr_timeslots  = aterms_offsets.shape[0]
+        aterm_offsets_nr_timeslots  = aterm_offsets.shape[0]
 
         lib.Plan_init.restype = ctypes.c_void_p
         lib.Plan_init.argtypes = [
@@ -53,17 +53,17 @@ class Plan(object):
             ctypes.c_int(subgrid_size),
             ctypes.c_int(grid_size),
             ctypes.c_float(cell_size),
-            frequencies.ctypes.data_as(ctypes.c_void_p),
+            frequencies.ctypes.data,
             ctypes.c_uint(nr_channels),
-            uvw.ctypes.data_as(ctypes.c_void_p),
+            uvw.ctypes.data,
             ctypes.c_uint(uvw_nr_baselines),
             ctypes.c_uint(uvw_nr_timesteps),
             ctypes.c_uint(uvw_nr_coordinates),
-            baselines.ctypes.data_as(ctypes.c_void_p),
+            baselines.ctypes.data,
             ctypes.c_uint(baselines_nr_baselines),
             ctypes.c_uint(baselines_two),
-            aterms_offsets.ctypes.data_as(ctypes.c_void_p),
-            ctypes.c_uint(aterms_offsets_nr_timeslots))
+            aterm_offsets.ctypes.data,
+            ctypes.c_uint(aterm_offsets_nr_timeslots))
 
 
     def __del__(self):
@@ -83,4 +83,14 @@ class Plan(object):
             ctypes.c_void_p]
         lib.Plan_copy_metadata(
             self.obj,
-            metadata.ctypes.data_as(ctypes.c_void_p))
+            metadata.ctypes.data)
+
+    def copy_aterm_indices(
+        self,
+        aterm_indices):
+        lib.Plan_copy_aterm_indices.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_void_p]
+        lib.Plan_copy_aterm_indices(
+            self.obj,
+            aterm_indices.ctypes.data)

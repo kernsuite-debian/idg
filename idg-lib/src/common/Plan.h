@@ -10,10 +10,11 @@
 #include <cmath>
 #include <numeric>
 #include <iterator>
+
+#include <aocommon/xt/span.h>
 #include <omp.h>
 
 #include "Types.h"
-#include "ArrayTypes.h"
 #include "WTiles.h"
 
 namespace idg {
@@ -53,10 +54,6 @@ class Plan {
     // zero means no limit
     unsigned max_nr_channels_per_subgrid = 0;
 
-    // consider only first channel when creating subgrids,
-    // add additional subgrids for every subsequent frequencies
-    bool simulate_spectral_line = false;
-
     // Imaging mode
     Mode mode = Mode::FULL_POLARIZATION;
   };
@@ -67,17 +64,21 @@ class Plan {
   Plan(Plan&&) = default;
 
   Plan(const int kernel_size, const int subgrid_size, const int grid_size,
-       const float cell_size, const Array1D<float>& shift,
-       const Array1D<float>& frequencies, const Array2D<UVW<float>>& uvw,
-       const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
-       const Array1D<unsigned int>& aterms_offsets,
+       const float cell_size, const std::array<float, 2>& shift,
+       const aocommon::xt::Span<float, 1>& frequencies,
+       const aocommon::xt::Span<UVW<float>, 2>& uvw,
+       const aocommon::xt::Span<std::pair<unsigned int, unsigned int>, 1>&
+           baselines,
+       const aocommon::xt::Span<unsigned int, 1>& aterm_offsets,
        Options options = Options());
 
   Plan(const int kernel_size, const int subgrid_size, const int grid_size,
-       const float cell_size, const Array1D<float>& shift,
-       const Array1D<float>& frequencies, const Array2D<UVW<float>>& uvw,
-       const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
-       const Array1D<unsigned int>& aterms_offsets, WTiles& wtiles,
+       const float cell_size, const std::array<float, 2>& shift,
+       const aocommon::xt::Span<float, 1>& frequencies,
+       const aocommon::xt::Span<UVW<float>, 2>& uvw,
+       const aocommon::xt::Span<std::pair<unsigned int, unsigned int>, 1>&
+           baselines,
+       const aocommon::xt::Span<unsigned int, 1>& aterm_offsets, WTiles& wtiles,
        Options options = Options());
 
   // Destructor
@@ -85,10 +86,11 @@ class Plan {
 
   void initialize(
       const int kernel_size, const int subgrid_size, const int grid_size,
-      const float cell_size, const Array1D<float>& frequencies,
-      const Array2D<UVW<float>>& uvw,
-      const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
-      const Array1D<unsigned int>& aterms_offsets, WTiles& wtiles,
+      const float cell_size, const aocommon::xt::Span<float, 1>& frequencies,
+      const aocommon::xt::Span<UVW<float>, 2>& uvw,
+      const aocommon::xt::Span<std::pair<unsigned int, unsigned int>, 1>&
+          baselines,
+      const aocommon::xt::Span<unsigned int, 1>& aterm_offsets, WTiles& wtiles,
       const Options& options);
 
   // options
@@ -124,13 +126,13 @@ class Plan {
   int get_max_nr_timesteps_subgrid() const;
 
   // total number of visibilities
-  int get_nr_visibilities() const;
+  size_t get_nr_visibilities() const;
 
   // number of visibilities one baseline
-  int get_nr_visibilities(int baseline) const;
+  size_t get_nr_visibilities(int baseline) const;
 
   // number of visibilities for baselines b1 to b1+n-1
-  int get_nr_visibilities(int baseline, int n) const;
+  size_t get_nr_visibilities(int baseline, int n) const;
 
   // number of baselines
   int get_nr_baselines() const {
@@ -143,15 +145,14 @@ class Plan {
 
   void copy_metadata(void* ptr) const;
 
-  const int* get_aterm_indices_ptr(int baseline = 0) const;
+  const unsigned int* get_aterm_indices_ptr(int baseline = 0) const;
+
+  void copy_aterm_indices(void* ptr) const;
 
   void initialize_job(const unsigned int nr_baselines,
                       const unsigned int jobsize, const unsigned int bl,
                       unsigned int* first_bl, unsigned int* last_bl,
                       unsigned int* current_nr_baselines) const;
-
-  // set visibilities not used by plan to zero
-  void mask_visibilities(Array5D<std::complex<float>>& visibilities) const;
 
   WTileUpdateSet get_wtile_initialize_set() const {
     return m_wtile_initialize_set;
@@ -173,11 +174,11 @@ class Plan {
   int get_subgrid_size() const { return m_subgrid_size; }
   float get_w_step() const { return m_w_step; }
 
-  const Array1D<float>& get_shift() const { return m_shift; }
+  const std::array<float, 2>& get_shift() const { return m_shift; }
   float get_cell_size() const { return m_cell_size; }
 
  private:
-  Array1D<float> m_shift{2};
+  std::array<float, 2> m_shift;
   int m_subgrid_size;
   float m_w_step;
   float m_cell_size;
@@ -187,7 +188,7 @@ class Plan {
   std::vector<int> total_nr_visibilities_per_baseline;
   WTileUpdateSet m_wtile_initialize_set;
   WTileUpdateSet m_wtile_flush_set;
-  std::vector<int> aterm_indices;
+  xt::xtensor<unsigned int, 2> aterm_indices;
   bool use_wtiles;
   Options m_options;
 };  // class Plan

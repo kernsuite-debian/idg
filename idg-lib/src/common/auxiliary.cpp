@@ -14,7 +14,6 @@
 #include "idg-common.h"
 #include "auxiliary.h"
 #include "memory.h"
-#include "PowerSensor.h"
 
 namespace idg {
 namespace auxiliary {
@@ -37,9 +36,9 @@ uint64_t flops_gridder(uint64_t nr_channels, uint64_t nr_timesteps,
   uint64_t flops_per_subgrid = 0;
   flops_per_subgrid += nr_polarizations_aterm * 30;  // aterm
   if (nr_correlations == 4) {
-    flops_per_subgrid += 4 * 2;  // spheroidal
+    flops_per_subgrid += 4 * 2;  // taper
   } else {
-    flops_per_subgrid += 1 * 2;  // spheroidal
+    flops_per_subgrid += 1 * 2;  // taper
   }
   flops_per_subgrid += 6;  // shift
 
@@ -74,9 +73,9 @@ uint64_t bytes_gridder(uint64_t nr_channels, uint64_t nr_timesteps,
   bytes_per_aterm +=
       1ULL * 2 * nr_polarizations_aterm * 2 * sizeof(float);  // read aterm
 
-  // Number of bytes per spheroidal
-  uint64_t bytes_per_spheroidal = 0;
-  bytes_per_spheroidal += 1ULL * sizeof(float);  // read spheroidal
+  // Number of bytes per taper
+  uint64_t bytes_per_taper = 0;
+  bytes_per_taper += 1ULL * sizeof(float);  // read taper
 
   // Total number of bytes
   uint64_t bytes_total = 0;
@@ -87,7 +86,7 @@ uint64_t bytes_gridder(uint64_t nr_channels, uint64_t nr_timesteps,
   bytes_total +=
       1ULL * nr_subgrids * subgrid_size * subgrid_size * bytes_per_aterm;
   bytes_total +=
-      1ULL * nr_subgrids * subgrid_size * subgrid_size * bytes_per_spheroidal;
+      1ULL * nr_subgrids * subgrid_size * subgrid_size * bytes_per_taper;
   return bytes_total;
 }
 
@@ -227,11 +226,6 @@ uint64_t sizeof_metadata(unsigned int nr_subgrids) {
   return 1ULL * nr_subgrids * sizeof(Metadata);
 }
 
-uint64_t sizeof_grid(unsigned int grid_size, uint64_t nr_correlations) {
-  return 1ULL * nr_correlations * grid_size * grid_size *
-         sizeof(std::complex<float>);
-}
-
 uint64_t sizeof_wavenumbers(unsigned int nr_channels) {
   return 1ULL * nr_channels * sizeof(float);
 }
@@ -242,12 +236,12 @@ uint64_t sizeof_aterms(unsigned int nr_stations, unsigned int nr_timeslots,
          subgrid_size * sizeof(std::complex<float>);
 }
 
-uint64_t sizeof_aterms_indices(unsigned int nr_baselines,
-                               unsigned int nr_timesteps) {
-  return 1ULL * nr_baselines * nr_timesteps * sizeof(int);
+uint64_t sizeof_aterm_indices(unsigned int nr_baselines,
+                              unsigned int nr_timesteps) {
+  return 1ULL * nr_baselines * nr_timesteps * sizeof(unsigned int);
 }
 
-uint64_t sizeof_spheroidal(unsigned int subgrid_size) {
+uint64_t sizeof_taper(unsigned int subgrid_size) {
   return 1ULL * subgrid_size * subgrid_size * sizeof(float);
 }
 
@@ -261,7 +255,7 @@ uint64_t sizeof_baselines(unsigned int nr_baselines) {
   return 1ULL * 2 * nr_baselines * sizeof(unsigned int);
 }
 
-uint64_t sizeof_aterms_offsets(unsigned int nr_timeslots) {
+uint64_t sizeof_aterm_offsets(unsigned int nr_timeslots) {
   return 1ULL * (nr_timeslots + 1) * sizeof(unsigned int);
 }
 
@@ -275,11 +269,11 @@ uint64_t sizeof_weights(unsigned int nr_baselines, unsigned int nr_timesteps,
 /*
     Misc
 */
-std::vector<int> split_int(const char *string, const char *delimiter) {
+std::vector<int> split_int(const char* string, const char* delimiter) {
   std::vector<int> splits;
-  char *string_buffer = new char[strlen(string) + 1];
+  char* string_buffer = new char[strlen(string) + 1];
   std::strcpy(string_buffer, string);
-  char *token = strtok(string_buffer, delimiter);
+  char* token = strtok(string_buffer, delimiter);
   if (token) splits.push_back(atoi(token));
   while (token) {
     token = strtok(NULL, delimiter);
@@ -289,12 +283,12 @@ std::vector<int> split_int(const char *string, const char *delimiter) {
   return splits;
 }
 
-std::vector<std::string> split_string(char *string, const char *delimiter) {
+std::vector<std::string> split_string(char* string, const char* delimiter) {
   std::vector<std::string> splits;
   if (!string) {
     return splits;
   }
-  char *token = strtok(string, delimiter);
+  char* token = strtok(string, delimiter);
   if (token) splits.push_back(token);
   while (token) {
     token = strtok(NULL, delimiter);
@@ -304,7 +298,7 @@ std::vector<std::string> split_string(char *string, const char *delimiter) {
 }
 
 std::string get_inc_dir() {
-  const char *inc_dir = std::getenv("IDG_INC_DIR");
+  const char* inc_dir = std::getenv("IDG_INC_DIR");
   if (inc_dir)
     return std::string(inc_dir);
   else
@@ -312,7 +306,7 @@ std::string get_inc_dir() {
 }
 
 std::string get_lib_dir() {
-  const char *lib_dir = std::getenv("IDG_LIB_DIR");
+  const char* lib_dir = std::getenv("IDG_LIB_DIR");
   if (lib_dir)
     return std::string(lib_dir);
   else

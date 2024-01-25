@@ -10,8 +10,6 @@ list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules)
 # options
 option(BUILD_LIB_CPU "Build CPU libraries" ON)
 option(BUILD_LIB_CUDA "Build CUDA libraries" OFF)
-#option (BUILD_LIB_OPENCL "Build OpenCL libraries" OFF)
-option(USE_DUMMY_VISIBILITIES "Run C++ examples using dummy visibilities" ON)
 
 # Compiler settings:
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
@@ -40,21 +38,6 @@ if(STRICT_WARNINGS
    AND CMAKE_BUILD_TYPE STREQUAL "Debug"
    AND GNU_CXX_COMPILER)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Werror")
-endif()
-
-# make sure C++11 is used (in newer CMake use CXX_STANDARD)
-include(CheckCXXCompilerFlag)
-check_cxx_compiler_flag("-std=c++11" COMPILER_SUPPORTS_CXX11)
-check_cxx_compiler_flag("-std=c++0x" COMPILER_SUPPORTS_CXX0X)
-if(COMPILER_SUPPORTS_CXX11)
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
-elseif(COMPILER_SUPPORTS_CXX0X)
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++0x")
-else()
-  message(
-    STATUS
-      "The compiler ${CMAKE_CXX_COMPILER} has no C++11 support. Please use a different C++ compiler."
-  )
 endif()
 
 # make sure openmp is used if available

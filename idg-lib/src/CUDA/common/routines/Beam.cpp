@@ -9,32 +9,40 @@ namespace cuda {
 
 void CUDA::do_compute_avg_beam(
     const unsigned int nr_antennas, const unsigned int nr_channels,
-    const Array2D<UVW<float>>& uvw,
-    const Array1D<std::pair<unsigned int, unsigned int>>& baselines,
-    const Array4D<Matrix2x2<std::complex<float>>>& aterms,
-    const Array1D<unsigned int>& aterms_offsets, const Array4D<float>& weights,
-    idg::Array4D<std::complex<float>>& average_beam) {
+    const aocommon::xt::Span<UVW<float>, 2>& uvw,
+    const aocommon::xt::Span<std::pair<unsigned int, unsigned int>, 1>&
+        baselines,
+    const aocommon::xt::Span<Matrix2x2<std::complex<float>>, 4>& aterms,
+    const aocommon::xt::Span<unsigned int, 1>& aterm_offsets,
+    const aocommon::xt::Span<float, 4>& weights,
+    aocommon::xt::Span<std::complex<float>, 4>& average_beam) {
 #if defined(DEBUG)
   std::cout << "CUDA::" << __func__ << std::endl;
 #endif
 
-  const unsigned int nr_polarizations = 4;
-  const unsigned int nr_aterms = aterms_offsets.size() - 1;
-  const unsigned int nr_baselines = baselines.get_x_dim();
-  const unsigned int nr_timesteps = uvw.get_x_dim();
-  const unsigned int subgrid_size = average_beam.get_w_dim();
+  const size_t nr_aterms = aterm_offsets.size() - 1;
+  const size_t nr_baselines = baselines.size();
+  assert(uvw.shape(0) == nr_baselines);
+  const size_t nr_timesteps = uvw.shape(1);
+  const size_t subgrid_size = average_beam.shape(0);
+  assert(average_beam.shape(1) == subgrid_size);
+  const size_t nr_polarizations = 4;
 
   InstanceCUDA& device = get_device(0);
   cu::Context& context = device.get_context();
 
   // Performance reporting
-  m_report->initialize();
-  device.set_report(m_report);
+  get_report()->initialize();
+  device.set_report(get_report());
 
   // Allocate device memory
-  cu::DeviceMemory d_aterms(context, aterms.bytes());
-  cu::DeviceMemory d_baselines(context, baselines.bytes());
-  cu::DeviceMemory d_aterms_offsets(context, aterms_offsets.bytes());
+  const size_t sizeof_aterms = aterms.size() * sizeof(*aterms.data());
+  const size_t sizeof_baselines = baselines.size() * sizeof(*baselines.data());
+  const size_t sizeof_aterm_offsets =
+      aterm_offsets.size() * sizeof(*aterm_offsets.data());
+  cu::DeviceMemory d_aterms(context, sizeof_aterms);
+  cu::DeviceMemory d_baselines(context, sizeof_baselines);
+  cu::DeviceMemory d_aterm_offsets(context, sizeof_aterm_offsets);
   // The average beam is constructed in double-precision on the device.
   // After all baselines are processed (i.e. all contributions are added),
   // the data is copied to the host and there converted to single-precision.
@@ -71,18 +79,18 @@ void CUDA::do_compute_avg_beam(
 
   // Initialize job data
   struct JobData {
-    unsigned int current_nr_baselines;
-    void* uvw_ptr;
-    void* weights_ptr;
+    size_t current_nr_baselines;
+    const idg::UVW<float>* uvw_ptr;
+    const float* weights_ptr;
   };
   std::vector<JobData> jobs;
-  for (unsigned bl = 0; bl < nr_baselines; bl += jobsize) {
+  for (size_t bl = 0; bl < nr_baselines; bl += jobsize) {
     JobData job;
-    unsigned int first_bl = bl;
-    unsigned int last_bl = std::min(bl + jobsize, nr_baselines);
+    const size_t first_bl = bl;
+    const size_t last_bl = std::min(bl + jobsize, nr_baselines);
     job.current_nr_baselines = last_bl - first_bl;
-    job.uvw_ptr = uvw.data(first_bl, 0);
-    job.weights_ptr = weights.data(first_bl, 0, 0, 0);
+    job.uvw_ptr = &uvw(first_bl, 0);
+    job.weights_ptr = &weights(first_bl, 0, 0, 0);
     if (job.current_nr_baselines > 0) {
       jobs.push_back(job);
     }
@@ -100,10 +108,10 @@ void CUDA::do_compute_avg_beam(
   cu::Stream& executestream = device.get_execute_stream();
 
   // Copy static data
-  htodstream.memcpyHtoDAsync(d_aterms, aterms.data(), aterms.bytes());
-  htodstream.memcpyHtoDAsync(d_baselines, baselines.data(), baselines.bytes());
-  htodstream.memcpyHtoDAsync(d_aterms_offsets, aterms_offsets.data(),
-                             aterms_offsets.bytes());
+  htodstream.memcpyHtoDAsync(d_aterms, aterms.data(), sizeof_aterms);
+  htodstream.memcpyHtoDAsync(d_baselines, baselines.data(), sizeof_baselines);
+  htodstream.memcpyHtoDAsync(d_aterm_offsets, aterm_offsets.data(),
+                             sizeof_aterm_offsets);
 
   // Initialize average beam
   d_average_beam.zero(htodstream);
@@ -151,32 +159,34 @@ void CUDA::do_compute_avg_beam(
     device.launch_average_beam(job.current_nr_baselines, nr_antennas,
                                nr_timesteps, nr_channels, nr_aterms,
                                subgrid_size, d_uvw, d_baselines, d_aterms,
-                               d_aterms_offsets, d_weights, d_average_beam);
+                               d_aterm_offsets, d_weights, d_average_beam);
   }
 
   // Wait for execution to finish
   executestream.synchronize();
 
   // Copy result to host
-  idg::Array4D<std::complex<double>> average_beam_double(subgrid_size,
-                                                         subgrid_size, 4, 4);
-  dtohstream.memcpyDtoHAsync(average_beam_double.data(), d_average_beam,
-                             average_beam_double.bytes());
+  Tensor<std::complex<double>, 4> average_beam_double =
+      allocate_tensor<std::complex<double>, 4>(
+          {subgrid_size, subgrid_size, 4, 4});
+  dtohstream.memcpyDtoH(average_beam_double.Span().data(), d_average_beam,
+                        average_beam_double.Span().size() *
+                            sizeof(*average_beam_double.Span().data()));
 
 // Convert to floating-point
 #pragma omp parallel for
-  for (unsigned int i = 0; i < subgrid_size * subgrid_size; i++) {
-    unsigned int y = i / subgrid_size;
-    unsigned int x = i % subgrid_size;
-    for (int ii = 0; ii < 4; ii++) {
-      for (int jj = 0; jj < 4; jj++) {
-        average_beam(y, x, ii, jj) += average_beam_double(y, x, ii, jj);
+  for (size_t i = 0; i < subgrid_size * subgrid_size; i++) {
+    const size_t y = i / subgrid_size;
+    const size_t x = i % subgrid_size;
+    for (size_t ii = 0; ii < 4; ii++) {
+      for (size_t jj = 0; jj < 4; jj++) {
+        average_beam(y, x, ii, jj) += average_beam_double.Span()(y, x, ii, jj);
       }
     }
   }
 
   // Performance reporting
-  m_report->print_total(nr_polarizations);
+  get_report()->print_total(nr_polarizations);
 }
 
 }  // end namespace cuda

@@ -1,6 +1,8 @@
 // Copyright (C) 2020 ASTRON (Netherlands Institute for Radio Astronomy)
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include <xtensor/xcomplex.hpp>
+
 #include "idg-cpu.h"   // Reference proxy
 #include "idg-util.h"  // Data init routines
 
@@ -30,7 +32,7 @@ int test01() {
   unsigned int nr_baselines = (nr_stations * (nr_stations - 1)) / 2;
   unsigned int nr_w_layers = 1;
   float integration_time = 1.0f;
-  const char *layout_file = "LOFAR_lba.txt";
+  const char* layout_file = "LOFAR_lba.txt";
 
   // Initialize Data object
   idg::Data data = idg::get_example_data(
@@ -50,31 +52,41 @@ int test01() {
   // error tolerance, which might need to be adjusted if parameters are changed
   float tol = 0.1f;
 
+  // Initialize proxy
+  clog << ">>> Initialize proxy" << endl;
+  idg::proxy::cpu::Reference proxy;
+
+  // Initialize frequency data
+  aocommon::xt::Span<float, 1> frequencies =
+      proxy.allocate_span<float, 1>({nr_channels});
+  data.get_frequencies(frequencies, image_size);
+
   // Allocate and initialize data structures
   clog << ">>> Initialize data structures" << endl;
-  idg::Array1D<float> frequencies(nr_channels);
-  data.get_frequencies(frequencies, image_size);
-  idg::Array2D<idg::UVW<float>> uvw = data.get_uvw(nr_baselines, nr_timesteps);
-  idg::Array4D<std::complex<float>> visibilities =
-      idg::get_example_visibilities(uvw, frequencies, image_size, grid_size,
-                                    nr_correlations);
-  idg::Array4D<std::complex<float>> visibilities_ref =
-      idg::get_example_visibilities(uvw, frequencies, image_size, grid_size,
-                                    nr_correlations);
-  idg::Array1D<std::pair<unsigned int, unsigned int>> baselines =
-      idg::get_example_baselines(nr_stations, nr_baselines);
-  auto grid = std::make_shared<idg::Grid>(nr_w_layers, nr_correlations,
-                                          grid_size, grid_size);
-  auto grid_ref = std::make_shared<idg::Grid>(nr_w_layers, nr_correlations,
-                                              grid_size, grid_size);
-  idg::Array4D<idg::Matrix2x2<std::complex<float>>> aterms =
-      idg::get_identity_aterms(nr_timeslots, nr_stations, subgrid_size,
+  auto uvw =
+      proxy.allocate_span<idg::UVW<float>, 2>({nr_baselines, nr_timesteps});
+  aocommon::xt::Span<std::complex<float>, 4> visibilities =
+      idg::get_example_visibilities(proxy, uvw, frequencies, image_size,
+                                    nr_correlations, grid_size);
+  aocommon::xt::Span<std::complex<float>, 4> visibilities_ref =
+      idg::get_example_visibilities(proxy, uvw, frequencies, image_size,
+                                    nr_correlations, grid_size);
+  aocommon::xt::Span<std::pair<unsigned int, unsigned int>, 1> baselines =
+      idg::get_example_baselines(proxy, nr_stations, nr_baselines);
+  aocommon::xt::Span<std::complex<float>, 4> grid =
+      proxy.allocate_span<std::complex<float>, 4>(
+          {nr_w_layers, nr_correlations, grid_size, grid_size});
+  aocommon::xt::Span<std::complex<float>, 4> grid_ref =
+      proxy.allocate_span<std::complex<float>, 4>(
+          {nr_w_layers, nr_correlations, grid_size, grid_size});
+  aocommon::xt::Span<idg::Matrix2x2<std::complex<float>>, 4> aterms =
+      idg::get_identity_aterms(proxy, nr_timeslots, nr_stations, subgrid_size,
                                subgrid_size);
-  idg::Array1D<unsigned int> aterms_offsets =
-      idg::get_example_aterms_offsets(nr_timeslots, nr_timesteps);
-  idg::Array2D<float> spheroidal =
-      idg::get_identity_spheroidal(subgrid_size, subgrid_size);
-  idg::Array1D<float> shift = idg::get_zero_shift();
+  aocommon::xt::Span<unsigned int, 1> aterm_offsets =
+      idg::get_example_aterm_offsets(proxy, nr_timeslots, nr_timesteps);
+  aocommon::xt::Span<float, 2> taper =
+      idg::get_identity_taper(proxy, subgrid_size, subgrid_size);
+  std::array<float, 2> shift{0.0f, 0.0f};
   clog << endl;
 
   // Set w-terms to zero
@@ -90,20 +102,16 @@ int test01() {
   int location_x = grid_size / 2 + offset_x;
   int location_y = grid_size / 2 + offset_y;
   float amplitude = 1.0f;
-  grid->zero();
-  grid_ref->zero();
-  (*grid_ref)(0, 0, location_y, location_x) = amplitude;
-  (*grid_ref)(0, 1, location_y, location_x) = amplitude;
-  (*grid_ref)(0, 2, location_y, location_x) = amplitude;
-  (*grid_ref)(0, 3, location_y, location_x) = amplitude;
-  visibilities_ref.zero();
+  grid.fill(std::complex<float>(0, 0));
+  grid_ref.fill(std::complex<float>(0, 0));
+  grid_ref(0, 0, location_y, location_x) = amplitude;
+  grid_ref(0, 1, location_y, location_x) = amplitude;
+  grid_ref(0, 2, location_y, location_x) = amplitude;
+  grid_ref(0, 3, location_y, location_x) = amplitude;
+  visibilities_ref.fill(std::complex<float>(0, 0));
   add_pt_src(visibilities_ref, uvw, frequencies, image_size, grid_size,
              offset_x, offset_y, amplitude);
   clog << endl;
-
-  // Initialize proxy
-  clog << ">>> Initialize proxy" << endl;
-  idg::proxy::cpu::Reference proxy;
 
   // Set grid
   proxy.set_grid(grid);
@@ -115,17 +123,17 @@ int test01() {
   idg::Plan::Options options;
   options.plan_strict = true;
   std::unique_ptr<idg::Plan> plan = proxy.make_plan(
-      kernel_size, frequencies, uvw, baselines, aterms_offsets, options);
+      kernel_size, frequencies, uvw, baselines, aterm_offsets, options);
   clog << endl;
 
   // Grid reference visibilities
   clog << ">>> Grid visibilities" << endl;
   proxy.gridding(*plan, frequencies, visibilities_ref, uvw, baselines, aterms,
-                 aterms_offsets, spheroidal);
+                 aterm_offsets, taper);
   proxy.transform(idg::FourierDomainToImageDomain);
 
   float grid_error = get_accuracy(grid_size * grid_size * nr_correlations,
-                                  grid->data(), grid_ref->data());
+                                  grid.data(), grid_ref.data());
 
   // Predict visibilities
   clog << ">>> Predict visibilities" << endl;
@@ -137,14 +145,14 @@ int test01() {
   proxy.set_grid(grid_ref);
 
   proxy.degridding(*plan, frequencies, visibilities, uvw, baselines, aterms,
-                   aterms_offsets, spheroidal);
+                   aterm_offsets, taper);
   clog << endl;
 
   // Compute error
   float degrid_error =
       get_accuracy(nr_baselines * nr_timesteps * nr_channels * nr_correlations,
-                   (std::complex<float> *)visibilities.data(),
-                   (std::complex<float> *)visibilities_ref.data());
+                   (std::complex<float>*)visibilities.data(),
+                   (std::complex<float>*)visibilities_ref.data());
 
   // Report error
   clog << "Grid error = " << std::scientific << grid_error << endl;
@@ -170,7 +178,7 @@ int test01() {
   return info;
 }
 
-int main(int argc, char *argv[]) {
+int main(int argc, char* argv[]) {
   int info = 0;
 
   info = test01();

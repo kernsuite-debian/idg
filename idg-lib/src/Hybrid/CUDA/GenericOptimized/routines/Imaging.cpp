@@ -5,37 +5,40 @@ using namespace idg::proxy::cuda;
 using namespace idg::proxy::cpu;
 using namespace idg::kernel::cpu;
 using namespace idg::kernel::cuda;
-using namespace powersensor;
 
 namespace idg {
 namespace proxy {
 namespace hybrid {
 
 void GenericOptimized::run_imaging(
-    const Plan& plan, const Array1D<float>& frequencies,
-    Array4D<std::complex<float>>& visibilities, const Array2D<UVW<float>>& uvw,
-    const Array1D<std::pair<unsigned int, unsigned int>>& baselines, Grid& grid,
-    const Array4D<Matrix2x2<std::complex<float>>>& aterms,
-    const Array1D<unsigned int>& aterms_offsets,
-    const Array2D<float>& spheroidal, ImagingMode mode) {
+    const Plan& plan, const aocommon::xt::Span<float, 1>& frequencies,
+    aocommon::xt::Span<std::complex<float>, 4>& visibilities,
+    const aocommon::xt::Span<UVW<float>, 2>& uvw,
+    const aocommon::xt::Span<std::pair<unsigned int, unsigned int>, 1>&
+        baselines,
+    aocommon::xt::Span<std::complex<float>, 4>& grid,
+    const aocommon::xt::Span<Matrix2x2<std::complex<float>>, 4>& aterms,
+    const aocommon::xt::Span<unsigned int, 1>& aterm_offsets,
+    const aocommon::xt::Span<float, 2>& taper, ImagingMode mode) {
   InstanceCUDA& device = get_device(0);
   const cu::Context& context = device.get_context();
 
   auto cpuKernels = cpuProxy->get_kernels();
 
   // Arguments
-  auto nr_baselines = visibilities.get_w_dim();
-  auto nr_timesteps = visibilities.get_z_dim();
-  auto nr_channels = visibilities.get_y_dim();
-  auto nr_correlations = visibilities.get_x_dim();
-  auto nr_stations = aterms.get_z_dim();
-  auto nr_polarizations = grid.get_z_dim();
-  auto grid_size = grid.get_x_dim();
-  auto cell_size = plan.get_cell_size();
-  auto image_size = cell_size * grid_size;
-  auto subgrid_size = plan.get_subgrid_size();
-  auto w_step = plan.get_w_step();
-  auto& shift = plan.get_shift();
+  const size_t nr_baselines = visibilities.shape(0);
+  const size_t nr_timesteps = visibilities.shape(1);
+  const size_t nr_channels = visibilities.shape(2);
+  const size_t nr_correlations = visibilities.shape(3);
+  const size_t nr_stations = aterms.shape(1);
+  const size_t nr_polarizations = grid.shape(1);
+  const size_t grid_size = grid.shape(2);
+  assert(grid.shape(3) == grid_size);
+  const float cell_size = plan.get_cell_size();
+  const float image_size = cell_size * grid_size;
+  const size_t subgrid_size = plan.get_subgrid_size();
+  const float w_step = plan.get_w_step();
+  const std::array<float, 2>& shift = plan.get_shift();
 
   WTileUpdateSet wtile_set;
   if (mode == ImagingMode::mode_gridding) {
@@ -44,24 +47,26 @@ void GenericOptimized::run_imaging(
     wtile_set = plan.get_wtile_initialize_set();
   }
 
-  // Convert frequencies to wavenumbers
-  Array1D<float> wavenumbers = compute_wavenumbers(frequencies);
+  Tensor<float, 1> wavenumbers = compute_wavenumbers(frequencies);
 
-  // Aterm indices
-  size_t sizeof_aterms_indices =
-      auxiliary::sizeof_aterms_indices(nr_baselines, nr_timesteps);
-  auto aterms_indices = plan.get_aterm_indices_ptr();
+  const size_t sizeof_wavenumbers =
+      wavenumbers.Span().size() * sizeof(*wavenumbers.Span().data());
+  const size_t sizeof_taper = taper.size() * sizeof(*taper.data());
+  const size_t sizeof_aterms = aterms.size() * sizeof(*aterms.data());
+  const size_t sizeof_aterm_indices =
+      auxiliary::sizeof_aterm_indices(nr_baselines, nr_timesteps);
+  const unsigned int* aterm_indices = plan.get_aterm_indices_ptr();
 
   // Configuration
   const unsigned nr_devices = get_num_devices();
   int device_id = 0;  // only one GPU is used
 
   // Performance measurements
-  m_report->initialize(nr_channels, subgrid_size, grid_size);
-  device.set_report(m_report);
-  cpuKernels->set_report(m_report);
-  std::vector<State> startStates(nr_devices + 1);
-  std::vector<State> endStates(nr_devices + 1);
+  get_report()->initialize(nr_channels, subgrid_size, grid_size);
+  device.set_report(get_report());
+  cpuKernels->set_report(get_report());
+  std::vector<pmt::State> startStates(nr_devices + 1);
+  std::vector<pmt::State> endStates(nr_devices + 1);
 
   // Load streams
   cu::Stream& executestream = device.get_execute_stream();
@@ -69,19 +74,18 @@ void GenericOptimized::run_imaging(
   cu::Stream& dtohstream = device.get_dtoh_stream();
 
   // Allocate device memory
-  cu::DeviceMemory d_wavenumbers(context, wavenumbers.bytes());
-  cu::DeviceMemory d_spheroidal(context, spheroidal.bytes());
-  cu::DeviceMemory d_aterms(context, aterms.bytes());
-  cu::DeviceMemory d_aterms_indices(context, sizeof_aterms_indices);
+  cu::DeviceMemory d_wavenumbers(context, sizeof_wavenumbers);
+  cu::DeviceMemory d_taper(context, sizeof_taper);
+  cu::DeviceMemory d_aterms(context, sizeof_aterms);
+  cu::DeviceMemory d_aterm_indices(context, sizeof_aterm_indices);
 
   // Initialize device memory
-  htodstream.memcpyHtoDAsync(d_wavenumbers, wavenumbers.data(),
-                             wavenumbers.bytes());
-  htodstream.memcpyHtoDAsync(d_spheroidal, spheroidal.data(),
-                             spheroidal.bytes());
-  htodstream.memcpyHtoDAsync(d_aterms, aterms.data(), aterms.bytes());
-  htodstream.memcpyHtoDAsync(d_aterms_indices, aterms_indices,
-                             sizeof_aterms_indices);
+  htodstream.memcpyHtoDAsync(d_wavenumbers, wavenumbers.Span().data(),
+                             sizeof_wavenumbers);
+  htodstream.memcpyHtoDAsync(d_taper, taper.data(), sizeof_taper);
+  htodstream.memcpyHtoDAsync(d_aterms, aterms.data(), sizeof_aterms);
+  htodstream.memcpyHtoDAsync(d_aterm_indices, aterm_indices,
+                             sizeof_aterm_indices);
 
   // When degridding, d_avg_aterm is not used and remains a null pointer.
   // When gridding, d_avg_aterm always holds a cu::DeviceMemory object. When
@@ -159,7 +163,7 @@ void GenericOptimized::run_imaging(
 
   // Start performance measurement
   startStates[device_id] = device.measure();
-  startStates[nr_devices] = hostPowerSensor->read();
+  startStates[nr_devices] = power_meter_->Read();
 
   // Iterate all jobs
   for (unsigned job_id = 0; job_id < jobs.size(); job_id++) {
@@ -252,9 +256,9 @@ void GenericOptimized::run_imaging(
       // Launch gridder kernel
       device.launch_gridder(
           time_offset_current, nr_subgrids_current, nr_polarizations, grid_size,
-          subgrid_size, image_size, w_step, nr_channels, nr_stations, shift(0),
-          shift(1), d_uvw, d_wavenumbers, d_visibilities, d_spheroidal,
-          d_aterms, d_aterms_indices, d_metadata, *d_avg_aterm, d_subgrids);
+          subgrid_size, image_size, w_step, nr_channels, nr_stations, shift[0],
+          shift[1], d_uvw, d_wavenumbers, d_visibilities, d_taper, d_aterms,
+          d_aterm_indices, d_metadata, *d_avg_aterm, d_subgrids);
 
       // Launch FFT
       device.launch_subgrid_fft(d_subgrids, nr_subgrids_current,
@@ -293,16 +297,16 @@ void GenericOptimized::run_imaging(
           cpuKernels->run_adder_wtiles(
               nr_subgrids_current, nr_polarizations, grid_size, subgrid_size,
               image_size, w_step, shift.data(), subgrid_offset, wtile_set,
-              metadata_ptr, subgrids_ptr, m_grid->data());
+              metadata_ptr, subgrids_ptr, get_grid().data());
         }
       } else if (w_step != 0.0) {
         cpuKernels->run_adder_wstack(nr_subgrids_current, nr_polarizations,
                                      grid_size, subgrid_size, metadata_ptr,
-                                     subgrids_ptr, m_grid->data());
+                                     subgrids_ptr, get_grid().data());
       } else {
         cpuKernels->run_adder(nr_subgrids_current, nr_polarizations, grid_size,
                               subgrid_size, metadata_ptr, subgrids_ptr,
-                              m_grid->data());
+                              get_grid().data());
       }
 
       marker_adder.end();
@@ -323,16 +327,16 @@ void GenericOptimized::run_imaging(
           cpuKernels->run_splitter_wtiles(
               nr_subgrids_current, nr_polarizations, grid_size, subgrid_size,
               image_size, w_step, shift.data(), subgrid_offset, wtile_set,
-              metadata_ptr, subgrids_ptr, m_grid->data());
+              metadata_ptr, subgrids_ptr, get_grid().data());
         }
       } else if (w_step != 0.0) {
         cpuKernels->run_splitter_wstack(nr_subgrids_current, nr_polarizations,
                                         grid_size, subgrid_size, metadata_ptr,
-                                        subgrids_ptr, m_grid->data());
+                                        subgrids_ptr, get_grid().data());
       } else {
         cpuKernels->run_splitter(nr_subgrids_current, nr_polarizations,
                                  grid_size, subgrid_size, metadata_ptr,
-                                 subgrids_ptr, m_grid->data());
+                                 subgrids_ptr, get_grid().data());
       }
 
       if (m_disable_wtiling || m_disable_wtiling_gpu) {
@@ -352,9 +356,9 @@ void GenericOptimized::run_imaging(
       // Launch degridder kernel
       device.launch_degridder(
           time_offset_current, nr_subgrids_current, nr_polarizations, grid_size,
-          subgrid_size, image_size, w_step, nr_channels, nr_stations, shift(0),
-          shift(1), d_uvw, d_wavenumbers, d_visibilities, d_spheroidal,
-          d_aterms, d_aterms_indices, d_metadata, d_subgrids);
+          subgrid_size, image_size, w_step, nr_channels, nr_stations, shift[0],
+          shift[1], d_uvw, d_wavenumbers, d_visibilities, d_taper, d_aterms,
+          d_aterm_indices, d_metadata, d_subgrids);
       executestream.record(gpuFinished[job_id]);
 
       // Copy visibilities to host
@@ -382,24 +386,25 @@ void GenericOptimized::run_imaging(
 
   // End performance measurement
   endStates[device_id] = device.measure();
-  endStates[nr_devices] = hostPowerSensor->read();
-  m_report->update(Report::device, startStates[device_id],
-                   endStates[device_id]);
-  m_report->update(Report::host, startStates[nr_devices],
-                   endStates[nr_devices]);
+  endStates[nr_devices] = power_meter_->Read();
+  get_report()->update(Report::device, startStates[device_id],
+                       endStates[device_id]);
+  get_report()->update(Report::host, startStates[nr_devices],
+                       endStates[nr_devices]);
 
   // Update report
   auto total_nr_subgrids = plan.get_nr_subgrids();
   auto total_nr_timesteps = plan.get_nr_timesteps();
   auto total_nr_visibilities = plan.get_nr_visibilities();
-  m_report->print_total(nr_correlations, total_nr_timesteps, total_nr_subgrids);
+  get_report()->print_total(nr_correlations, total_nr_timesteps,
+                            total_nr_subgrids);
   const std::string* name;
   if (mode == ImagingMode::mode_gridding) {
     name = &auxiliary::name_gridding;
   } else if (mode == ImagingMode::mode_degridding) {
     name = &auxiliary::name_degridding;
   }
-  m_report->print_visibilities(*name, total_nr_visibilities);
+  get_report()->print_visibilities(*name, total_nr_visibilities);
 
   // Cleanup
   device.free_subgrid_fft();

@@ -19,8 +19,8 @@ void kernel_degridder(
     const float w_step_in_lambda, const float* __restrict__ shift,
     const int nr_correlations, const int nr_channels, const int nr_stations,
     const idg::UVW<float>* uvw, const float* wavenumbers,
-    std::complex<float>* visibilities, const float* spheroidal,
-    const std::complex<float>* aterms, const int* aterms_indices,
+    std::complex<float>* visibilities, const float* taper,
+    const std::complex<float>* aterms, const unsigned int* aterm_indices,
     const idg::Metadata* metadata, const std::complex<float>* subgrid) {
 // Iterate all subgrids
 #pragma omp parallel for
@@ -56,14 +56,14 @@ void kernel_degridder(
       // Apply aterm to subgrid
       for (int y = 0; y < subgrid_size; y++) {
         for (int x = 0; x < subgrid_size; x++) {
-          // Load spheroidal
-          float sph = spheroidal[y * subgrid_size + x];
+          // Load taper
+          float sph = taper[y * subgrid_size + x];
 
           // Compute shifted position in subgrid
           int x_src = (x + (subgrid_size / 2)) % subgrid_size;
           int y_src = (y + (subgrid_size / 2)) % subgrid_size;
 
-          // Load pixel values and apply spheroidal
+          // Load pixel values and apply taper
           if (nr_correlations == 4) {
             for (int pol = 0; pol < nr_polarizations; pol++) {
               size_t index =
@@ -80,7 +80,7 @@ void kernel_degridder(
           }
 
           // Load aterm index
-          int aterm_index = aterms_indices[time_offset + time];
+          const unsigned int aterm_index = aterm_indices[time_offset + time];
 
           // Load aterm for station1
           int station1_index = (aterm_index * nr_stations + station1) *

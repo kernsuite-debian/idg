@@ -35,7 +35,7 @@
  * @param aterms Pointer to @p nr_timeslots x @p nr_stations x 2 x 2 Jones
  * matrix entries (float complex*) see
  * @verbatim embed:rst:inline :doc:`aterms` @endverbatim
- * @param aterms_offsets Pointer to @p nr_timesteps + 1  time step indices,
+ * @param aterm_offsets Pointer to @p nr_timesteps + 1  time step indices,
  * see the documentation on
  * @verbatim embed:rst:inline :doc:`aterms` @endverbatim
  * @param taper Pointer to @p subgrid_size x @p subgrid_size floats,
@@ -46,7 +46,7 @@ void Proxy_gridding(struct Proxy* p, int kernel_size, int subgrid_size,
                     int nr_correlations, int nr_timeslots, int nr_stations,
                     float* frequencies, float complex* visibilities, float* uvw,
                     unsigned int* baselines, float complex* aterms,
-                    unsigned int* aterms_offsets, float* taper);
+                    unsigned int* aterm_offsets, float* taper);
 
 /**
  * Degrid visibilities
@@ -82,7 +82,7 @@ void Proxy_gridding(struct Proxy* p, int kernel_size, int subgrid_size,
  * @param aterms[in] Pointer to @p nr_timeslots x @p nr_stations x 2 x 2 Jones
  * matrix entries (float complex*) see
  * @verbatim embed:rst:inline :doc:`aterms` @endverbatim
- * @param aterms_offsets[in] Pointer to @p nr_timesteps + 1  time step indices,
+ * @param aterm_offsets[in] Pointer to @p nr_timesteps + 1  time step indices,
  * see the documentation on
  * @verbatim embed:rst:inline :doc:`aterms` @endverbatim
  * @param taper[in] Pointer to @p subgrid_size x @p subgrid_size floats,
@@ -95,7 +95,7 @@ void Proxy_degridding(struct Proxy* p, int kernel_size, int subgrid_size,
                       int nr_correlations, int nr_timeslots, int nr_stations,
                       float* frequencies, float complex* visibilities,
                       float* uvw, unsigned int* baselines,
-                      float complex* aterms, unsigned int* aterms_offsets,
+                      float complex* aterms, unsigned int* aterm_offsets,
                       float* taper);
 
 /**
@@ -141,7 +141,7 @@ void Proxy_init_cache(struct Proxy* p, unsigned int subgrid_size,
  * @param uvw Pointer to @p nr_baselines * @p nr_timesteps u,v,w triplets
  * (floats)
  * @param baselines Pointer to @p nr_baselines pairs of station indices (ints)
- * @param aterms_offsets Pointer to @p nr_timesteps + 1  time step indices,
+ * @param aterm_offsets Pointer to @p nr_timesteps + 1  time step indices,
  * see the documentation on
  * @verbatim embed:rst:inline :doc:`aterms` @endverbatim
  * @param taper Pointer to @p subgrid_size x @p subgrid_size floats,
@@ -156,7 +156,7 @@ void Proxy_calibrate_init(struct Proxy* p, unsigned int kernel_size,
                           unsigned int nr_timeslots, float* frequencies,
                           float complex* visibilities, float* weights,
                           float* uvw, unsigned int* baselines,
-                          unsigned int* aterms_offsets, float* taper);
+                          unsigned int* aterm_offsets, float* taper);
 
 /**
  * @brief Calibration update step
@@ -170,7 +170,7 @@ void Proxy_calibrate_init(struct Proxy* p, unsigned int kernel_size,
  *
  * @param p[in] Pointer to Proxy object, previously obtained by one of the
  *              create_<proxy_name>() functions.
- * @param[in] station_nr Station for which the update is computed
+ * @param[in] antenna_nr Antenna for which the update is computed
  * @param[in] subgrid_size Size of the subgrid
  * @param[in] nr_stations Number of stations
  * @param nr_timeslots[in] Number of a-term time slots
@@ -187,7 +187,7 @@ void Proxy_calibrate_init(struct Proxy* p, unsigned int kernel_size,
  * @param[out] gradient
  * @param[out] residual
  */
-void Proxy_calibrate_update(struct Proxy* p, const unsigned int station_nr,
+void Proxy_calibrate_update(struct Proxy* p, const unsigned int antenna_nr,
                             const unsigned int nr_channel_blocks,
                             const unsigned int subgrid_size,
                             const unsigned int nr_stations,

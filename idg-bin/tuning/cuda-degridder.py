@@ -27,6 +27,7 @@ def tune():
     tune_params = OrderedDict()
     tune_params["BLOCK_SIZE_X"] = args.block_size
     tune_params["NUM_BLOCKS"] = args.num_blocks
+    tune_params["USE_EXTRAPOLATE"] = [0, 1]
 
     # IDG parameters
     grid_size = 8192
@@ -65,7 +66,7 @@ def tune():
         nr_subgrids, nr_baselines, nr_timeslots, nr_timesteps_per_subgrid, nr_channels)
 
     # Initialize aterms indices
-    aterms_indices = idg.get_aterms_indices(
+    aterm_indices = idg.get_aterm_indices(
         nr_timesteps_per_baseline, nr_timesteps_per_subgrid)
 
     # The following data types should have the correct dimensions,
@@ -78,7 +79,7 @@ def tune():
     visibilities = np.random.randn(
         nr_baselines, nr_timesteps_per_baseline, nr_channels, nr_correlations
     ).astype(dtype=np.complex64)
-    spheroidal = np.random.randn(
+    taper = np.random.randn(
         subgrid_size, subgrid_size).astype(dtype=np.float32)
     aterms = np.random.randn(nr_aterms, subgrid_size, subgrid_size, 4).astype(
         dtype=np.complex64
@@ -102,9 +103,9 @@ def tune():
         uvw,
         wavenumbers,
         visibilities,
-        spheroidal,
+        taper,
         aterms,
-        aterms_indices,
+        aterm_indices,
         metadata,
         subgrids,
     ]
