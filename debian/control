@@ -4,9 +4,11 @@ Priority: extra
 Maintainer: KERN packaging <packaging@kernsuite.info>
 Build-Depends:
  cmake,
- debhelper (>=11),
+ debhelper-compat (= 13),
  dh-python,
  libclfft-dev,
+ casacore-dev,
+ clang-format-14,
  dh-python,
  python3-all,
  libfftw3-dev,
@@ -16,8 +18,10 @@ Build-Depends:
  opencl-clhpp-headers,
  liblapack-dev,
  libblas-dev,
- python3-dev
-Standards-Version: 4.5.0
+ python3-dev,
+ git-all,
+ xtl-dev
+Standards-Version: 4.6.2.0
 Homepage: https://gitlab.com/astron-idg/idg
 
 Package: idg-dev
@@ -85,7 +89,7 @@ Description: Image Domain Gridding util library
 
 Package: python3-idg
 Architecture: any
-Depends: ${misc:Depends}, ${shlibs:Depends}
+Depends: ${misc:Depends}, ${shlibs:Depends}, ${python3:Depends}
 Description: image Domain Gridding Python3 library
 
 Package: idg-doc
