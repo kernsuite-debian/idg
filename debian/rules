@@ -5,11 +5,8 @@
 	dh $@  --parallel
 
 override_dh_auto_configure:
-	dh_auto_configure -- \
-        -DPython_VERSION_MAJOR=3 \
-        -DPython_VERSION_MINOR=6 \
-		-DBUILD_LIB_CPU=ON \
-		-DBUILD_LIB_CUDA=ON \
-		-DBUILD_LIB_OPENCL=OFF \
-		-DBUILD_WITH_PYTHON=ON \
-		-DBUILD_WITH_MKL=OFF 
+	dh_auto_configure -- -DBUILD_WITH_PYTHON=ON -DGIT_SUBMODULE=OFF \
+	      		     -DPython_VERSION_MAJOR=3 \
+			     -DPython_VERSION_MINOR=10 \
+                             -DBUILD_LIB_CPU=ON \
+                             -DBUILD_LIB_CUDA=ON
