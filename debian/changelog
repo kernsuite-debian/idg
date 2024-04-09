@@ -1,3 +1,11 @@
+idg (1.2.0-1kern1) jammy; urgency=medium
+
+  [ Athanaseus Javas Ramaila ]
+  * New upstream version 1.2.0
+  * Build for jammy
+
+ -- KERN packaging <packaging@kernsuite.info>  Thu, 25 Jan 2024 20:24:16 +0000
+
 idg (1.0.0-1kern2) focal; urgency=medium
 
   [ Athanaseus Javas Ramaila ]
