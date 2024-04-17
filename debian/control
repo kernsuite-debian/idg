@@ -19,7 +19,9 @@ Build-Depends:
  liblapack-dev,
  libblas-dev,
  python3-dev,
- git-all,
+ libxsimd-dev,
+ libxtensor-dev,
+ xtensor-dev,
  xtl-dev
 Standards-Version: 4.6.2.0
 Homepage: https://gitlab.com/astron-idg/idg
