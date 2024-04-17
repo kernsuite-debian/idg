@@ -1,0 +1,13 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 1a31257..e9e47da 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -64,7 +64,7 @@ if(GIT_SUBMODULE)
+ endif()
+ 
+ include_directories(${CMAKE_SOURCE_DIR}/external/aocommon/include/)
+-include(external/aocommon/CMake/FetchXTensor.cmake)
++#include(external/aocommon/CMake/FetchXTensor.cmake)
+ include_directories(SYSTEM "${xtensor_SOURCE_DIR}/include")
+ include_directories(SYSTEM "${xtl_SOURCE_DIR}/include")
+ 
