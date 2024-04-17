@@ -9,4 +9,4 @@ override_dh_auto_configure:
 	      		     -DPython_VERSION_MAJOR=3 -DXTL_GIT_TAG=0.7.2 \
 			     -DPython_VERSION_MINOR=10 \
                              -DBUILD_LIB_CPU=ON \
-                             -DBUILD_LIB_CUDA=OFF
+                             -DBUILD_LIB_CUDA=ON

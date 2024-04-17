@@ -1,9 +1,16 @@
+idg (1.2.0-2kern3) jammy; urgency=medium
+
+  [ Athanaseus Javas Ramaila ]
+  * Enable CUDA build
+
+ -- KERN packaging <packaging@kernsuite.info>  Wed, 17 Apr 2024 21:42:29 +0000
+
 idg (1.2.0-2kern2) jammy; urgency=medium
 
   [ Athanaseus Javas Ramaila ]
   * Don't fetch extensor patch
 
- -- KERN packaging <packaging@kernsuite.info>  Wed, 08 Apr 2024 22:24:16 +0000
+ -- KERN packaging <packaging@kernsuite.info>  Wed, 08 Apr 2024 21:24:16 +0000
 
 idg (1.2.0-1kern2) jammy; urgency=medium
 
