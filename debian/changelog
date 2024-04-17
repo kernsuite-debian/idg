@@ -1,3 +1,17 @@
+idg (1.2.0-2kern2) jammy; urgency=medium
+
+  [ Athanaseus Javas Ramaila ]
+  * Don't fetch extensor patch
+
+ -- KERN packaging <packaging@kernsuite.info>  Wed, 08 Apr 2024 22:24:16 +0000
+
+idg (1.2.0-1kern2) jammy; urgency=medium
+
+  [ Athanaseus Javas Ramaila ]
+  * Deps fix
+
+ -- KERN packaging <packaging@kernsuite.info>  Thu, 08 Apr 2024 20:24:16 +0000
+
 idg (1.2.0-1kern1) jammy; urgency=medium
 
   [ Athanaseus Javas Ramaila ]
