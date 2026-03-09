@@ -1,3 +1,10 @@
+idg (1.2.0-2kern4) noble; urgency=medium
+
+  [ Athanaseus Javas Ramaila ]
+  * Builf for noble
+
+ -- KERN packaging <packaging@kernsuite.info>  Mon, 09 Mar 2026 19:31:28 +0200
+
 idg (1.2.0-2kern3) jammy; urgency=medium
 
   [ Athanaseus Javas Ramaila ]

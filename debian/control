@@ -14,7 +14,6 @@ Build-Depends:
  libfftw3-dev,
  libgfortran5,
  libldap-common,
- nvidia-cuda-toolkit,
  opencl-clhpp-headers,
  liblapack-dev,
  libblas-dev,
