@@ -1,3 +1,4 @@
 version=4
-opts="searchmode=plain" \
- https://gitlab.com/astron-idg/idg/tags?sort=updated_desc -/archive/v?\d[\d.]+/@idg@-@ANY_VERSION@@ARCHIVE_EXT@
+opts="searchmode=plain,filenamemangle=s%.*?/archive/v?(\d[\d.]*)/.*%idg-$1.tar.gz%" \
+  https://gitlab.com/astron-idg/idg/-/tags?format=atom \
+  .*/archive/v?(\d[\d.]*)/.*\.tar\.gz
