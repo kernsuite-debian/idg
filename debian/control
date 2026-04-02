@@ -34,10 +34,8 @@ Depends: libidg0 (= ${binary:Version}),
          libidg-api0 (= ${binary:Version}),
          libidg-common0 (= ${binary:Version}),
          libidg-cpu0 (= ${binary:Version}),
-         libidg-cuda0 (= ${binary:Version}),
          libidg-external0 (= ${binary:Version}),
          libidg-fft0 (= ${binary:Version}),
-         libidg-hybrid-cuda0 (= ${binary:Version}),
          libidg-util0 (= ${binary:Version}),
          ${misc:Depends}
 Pre-Depends: ${misc:Pre-Depends}

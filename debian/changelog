@@ -1,3 +1,10 @@
+idg (1.2.0-2kern5) noble; urgency=medium
+
+  [ Athanaseus Javas Ramaila ]
+  * Remove cuda support
+
+ -- KERN packaging <packaging@kernsuite.info>  Thu, 02 Apr 2026 13:34:23 +0200
+
 idg (1.2.0-2kern4) noble; urgency=medium
 
   [ Athanaseus Javas Ramaila ]
