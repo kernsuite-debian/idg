@@ -1,3 +1,10 @@
+idg (1.2.0-2kern8) noble; urgency=medium
+
+  [ Athanaseus Javas Ramaila ]
+  * Install libs
+
+ -- KERN packaging <packaging@kernsuite.info>  Thu, 02 Apr 2026 15:49:30 +0200
+
 idg (1.2.0-2kern5) noble; urgency=medium
 
   [ Athanaseus Javas Ramaila ]
